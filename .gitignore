@@ -3,3 +3,4 @@ __pycache__/
 assets/
 prompt_docs/
 .env
+node_modules/

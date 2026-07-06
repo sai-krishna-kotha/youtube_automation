@@ -3,6 +3,7 @@ import json
 import time
 from pathlib import Path
 from app.models.script_schema import ReviewResponse
+SLEEP_TIME = 5
 
 class ScriptGenerationService:
     """
@@ -75,7 +76,7 @@ class ScriptGenerationService:
         while iteration < max_retries:
             iteration += 1
             print(f"\n--- Script Iteration {iteration} ---")
-            time.sleep(2)
+            time.sleep(SLEEP_TIME)
             
             print("  [Evaluator] Assessing script and generating Editing Project Plan...")
             reviewer_instructions = self._read_prompt("script_reviewer.txt")
@@ -83,7 +84,7 @@ class ScriptGenerationService:
             
             review_result_raw = self.llm.generate_json(review_prompt, response_model=ReviewResponse)
             review_data = ReviewResponse(**json.loads(review_result_raw))
-            print(f"Review DATA: {review_data}")
+            # print(f"Review DATA: {review_data}")
             print(f"  [Evaluator] Score: {review_data.score}/10.0 | Publish: {review_data.publish}")
             self._save_log(f"--- REVIEW {iteration} (Score: {review_data.score}) ---\n\n{json.dumps(review_data.model_dump(), indent=2)}")
             
@@ -98,8 +99,12 @@ class ScriptGenerationService:
                 self._save_final_script(best_script)
                 return best_script
                 
+            if iteration == max_retries:
+                print("  [Pipeline] Final iteration reached without approval. Halting edits.")
+                break
+            
             print("  [Editor] Executing the Project Plan tasks...")
-            time.sleep(2)
+            time.sleep(SLEEP_TIME)
             
             editor_instructions = self._read_prompt("script_editor.txt")
             

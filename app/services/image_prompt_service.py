@@ -2,6 +2,7 @@ import json
 import time
 from pathlib import Path
 from app.models.script_schema import BatchPromptResponse
+SLEEP_TIME = 20
 
 class ImagePromptService:
     def __init__(self, llm_client, prompt_dir: Path, output_dir: Path = None):
@@ -58,8 +59,8 @@ class ImagePromptService:
 
             # Rate-limiting cooldown to safeguard the Gemini free tier limits
             if idx < total_batches - 1:
-                print("Waiting 4 seconds to protect API rate limits...")
-                time.sleep(4)
+                print(f"Waiting {SLEEP_TIME} seconds to protect API rate limits...")
+                time.sleep(SLEEP_TIME)
 
         # Sort all compiled elements chronologically to ensure absolute sequencing stability
         all_compiled_shots.sort(key=lambda x: x.start_time)
