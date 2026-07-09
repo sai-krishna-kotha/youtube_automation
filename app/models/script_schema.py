@@ -39,8 +39,6 @@ class SingleShotPrompt(BaseModel):
 class BatchPromptResponse(BaseModel):
     shots: list[SingleShotPrompt] = Field(..., description="The list of generated image prompts mapping 1:1 to the transcript segment timestamps.")
     
-from pydantic import BaseModel, Field
-from typing import List
 
 class ThumbnailData(BaseModel):
     image_prompt: str = Field(description="The highly detailed, exact image generation prompt for an AI tool to create this visual (including lighting, style, and composition).")
@@ -53,7 +51,7 @@ class ThumbnailResponse(BaseModel):
     thumbnails: List[ThumbnailData] = Field(description="List of exactly 5 distinct thumbnail concepts.")
 
 class VideoMetadata(BaseModel):
-    title: str = Field(description="A 50-60 character high-CTR title maximizing curiosity gaps, directly related to the thumbnail text/concept.")
+    title: str = Field(description="A 50-0 character high-CTR title maximizing curiosity gaps, directly related to the thumbnail text/concept.")
     description: str = Field(description="A compelling 2-paragraph hook, followed strictly by timestamped CHAPTERS formatted as 'MM:SS Title', KEYWORDS, and HASHTAGS with clear double line breaks.")
     tags: str = Field(description="Comma-separated SEO tags for tags input field.")
     score: int = Field(description="Estimated CTR/SEO score out of 100 based on title curiosity and keyword volume.")

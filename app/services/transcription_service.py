@@ -23,12 +23,17 @@ class TranscriptionService:
         else:
             print("[WARNING] WhisperX not found. Service will run in mock mode.")
 
-    def _enforce_segment_pacing(self, raw_segments: list, max_duration: float = 4.5) -> list:
+    def _enforce_segment_pacing(
+        self, 
+        raw_segments: list, 
+        punc_limit: float = 1.5, 
+        conj_limit: float = 3.0, 
+        max_duration: float = 4.5
+    ) -> list:
         """
-        Advanced Pacing Enforcer:
-        1. Punctuation Cut: Slices after a comma/period if > 1.5s
-        2. Conjunction Cut: Slices BEFORE words like 'and/but/because' if > 3.0s
-        3. Hard Cut: Failsafe cut at 4.5s to prevent stagnant visuals
+        Advanced Dynamic Pacing Enforcer:
+        Pass higher values (e.g., punc_limit=8.0, conj_limit=9.0, max_duration=10.0) 
+        to maximize segment lengths up to 8-10 seconds.
         """
         refined_segments = []
         conjunctions = {'and', 'but', 'so', 'because', 'or', 'that', 'if', 'when', 'while', 'then'}
@@ -49,13 +54,12 @@ class TranscriptionService:
                 w_start = word_data.get("start", last_end)
                 w_end = word_data.get("end", w_start + 0.2)
                 
-                # Pre-append checks for Conjunctions
                 current_duration_pre = w_start - current_start
                 clean_word = word_text.lower().strip(' .,!?;:"\'')
                 is_conjunction = clean_word in conjunctions
                 
-                # TIER 2: CONJUNCTION CUT (Cut BEFORE the word starts)
-                if current_duration_pre >= 3.0 and is_conjunction and current_text:
+                # TIER 2: CONJUNCTION CUT (Using dynamic parameter)
+                if current_duration_pre >= conj_limit and is_conjunction and current_text:
                     refined_segments.append({
                         "start": current_start,
                         "end": w_start,
@@ -64,15 +68,14 @@ class TranscriptionService:
                     current_text = []
                     current_start = w_start
                 
-                # Append the word to the current working text
                 current_text.append(word_text)
                 last_end = w_end
                 
                 current_duration_post = w_end - current_start
                 has_punctuation = any(p in word_text for p in ['.', ',', '!', '?', ';', ':'])
                 
-                # TIER 1: PUNCTUATION CUT (Cut AFTER the word)
-                if current_duration_post >= 1.5 and has_punctuation:
+                # TIER 1: PUNCTUATION CUT (Using dynamic parameter)
+                if current_duration_post >= punc_limit and has_punctuation:
                     refined_segments.append({
                         "start": current_start,
                         "end": w_end,
@@ -81,7 +84,7 @@ class TranscriptionService:
                     current_text = []
                     current_start = w_end
                     
-                # TIER 3: HARD CUT FAILSAFE (Force cut)
+                # TIER 3: HARD CUT FAILSAFE (Using dynamic parameter)
                 elif current_duration_post >= max_duration:
                     refined_segments.append({
                         "start": current_start,
@@ -91,7 +94,6 @@ class TranscriptionService:
                     current_text = []
                     current_start = w_end
                     
-            # Flush any dangling words at the end of the original segment
             if current_text:
                 refined_segments.append({
                     "start": current_start,
@@ -100,7 +102,8 @@ class TranscriptionService:
                 })
                 
         return refined_segments
-
+    
+    
     def extract_and_batch(self, audio_path: Path, min_duration: float = 40.0, max_duration: float = 60.0) -> Path:
         print("\n--- AUDIO TRANSCRIPTION & SMART BATCHING ---")
         output_path = self.output_dir / "time_stamped_transcription.json"
@@ -120,8 +123,14 @@ class TranscriptionService:
         aligned_result = whisperx.align(result["segments"], model_a, metadata, audio, self.device, return_char_alignments=False)
         
         print("Enforcing 3-5s visual pacing at punctuation breaks...")
-        paced_segments = self._enforce_segment_pacing(aligned_result["segments"], max_duration=4.5)
-        
+        # paced_segments = self._enforce_segment_pacing(aligned_result["segments"], max_duration=4.5)
+        # Simply pass your desired thresholds here!
+        paced_segments = self._enforce_segment_pacing(
+            aligned_result["segments"], 
+            punc_limit=8.0,   # 1.5    # Keeps phrases together even past periods/commas up to 8s
+            conj_limit=9.0,   # 3.0    # Keeps phrases together past "and/but" up to 9s
+            max_duration=10.0 # 4.5    # Hard cutoff ceiling at 10s
+        )
         print("Executing Semantic Chunking (Smart Batching)...")
         batches = []
         current_batch = []

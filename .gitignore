@@ -4,3 +4,4 @@ assets/
 prompt_docs/
 .env
 node_modules/
+prompts/

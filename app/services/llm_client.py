@@ -4,17 +4,19 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-# models
-# gemini-3-flash-preview
-# gemini-3.5-flash
-# gemini-3.1-flash-lite
-# gemini-2.5-flash
+# Usage models and Rate limts
+# model                     , RPM, RPD , TPM
+# gemini-2.5-flash          , 05 , 20  , 250K
+# gemini-3-flash-preview    , 05 , 20  , 250K
+# gemini-3.5-flash          , 05 , 20  , 250K
+# gemini-2.5-flash-lite     , 10 , 20  , 250K
+# gemini-3.1-flash-lite     , 15 , 500 , 250K
 
 class GeminiClient:
     def __init__(self):
         # The SDK automatically picks up GEMINI_API_KEY from the environment
         self.client = genai.Client()
-        self.model_id = "gemini-3-flash-preview"
+        self.model_id = "gemini-3.1-flash-lite"
 
     def generate_text(self, prompt: str) -> str:
         """Generates raw text for the Creator and Editor agents."""

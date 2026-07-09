@@ -119,7 +119,7 @@ def build_video(project_dir: Path):
     blueprint_lines = []
     
     # --- CHANNEL LOGIC & POOL PRINTING ---
-    is_raw_mode = "second" in channel_name
+    is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech"])
     
     print(f"\n[Engine] Channel Detected: {channel_name.upper()}")
     print(f"[Engine] Audio Duration: {total_audio_time:.2f} seconds")
