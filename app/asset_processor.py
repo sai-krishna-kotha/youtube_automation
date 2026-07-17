@@ -77,13 +77,13 @@ def run_watermark_removal(raw_dir: Path, output_dir: Path):
             continue
 
     print("[Factory] Watermark Removal Complete!")
-def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path):
-    """Executes Real-ESRGAN in a safe temp directory with Smart Resume."""
-    print("\n[Factory] Starting 4K Upscaling...")
+def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path, upscaler_model: str = "realesrgan-x4plus-anime"):
+    """Executes Real-ESRGAN in a safe temp directory with Smart Resume and dynamic models."""
+    print(f"\n[Factory] Starting 4K Upscaling (Model: {upscaler_model})...")
     
     if not UPSCALER_EXE.exists():
         print(f"[!] ERROR: Upscaler not found at {UPSCALER_EXE}")
-        print("[!] Please update the UPSCALER_EXE path at the top of module2_factory.py")
+        print("[!] Please update the UPSCALER_EXE path at the top of asset_processor.py")
         return
 
     output_dir.mkdir(exist_ok=True)
@@ -108,12 +108,12 @@ def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path):
     for img in images_to_process:
         shutil.copy2(img, temp_dir / img.name)
 
-    print(f"  -> Firing up Real-ESRGAN ({UPSCALER_MODEL}). This will take a while...\n")
+    print(f"  -> Firing up Real-ESRGAN ({upscaler_model}). This will take a while...\n")
     command = [
         str(UPSCALER_EXE),
         "-i", str(temp_dir),
         "-o", str(output_dir),
-        "-n", UPSCALER_MODEL,
+        "-n", upscaler_model,
         "-s", "4",
         "-f", "png"
     ]
@@ -126,7 +126,8 @@ def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path):
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
-
+            
+            
 def run_renamer(input_dir: Path, output_dir: Path):
     """Converts [125_45]_img_1.jpeg to human-readable 02_05_45_01.png with Smart Resume"""
     print("\n[Factory] Translating timestamps for human editors...")

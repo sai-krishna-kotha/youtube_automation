@@ -1,4 +1,5 @@
 import json
+import yaml
 from pathlib import Path
 from app.models.script_schema import AudioSegment, AudioBatch, TimestampedTranscription
 
@@ -31,9 +32,7 @@ class TranscriptionService:
         max_duration: float = 4.5
     ) -> list:
         """
-        Advanced Dynamic Pacing Enforcer:
-        Pass higher values (e.g., punc_limit=8.0, conj_limit=9.0, max_duration=10.0) 
-        to maximize segment lengths up to 8-10 seconds.
+        Advanced Dynamic Pacing Enforcer
         """
         refined_segments = []
         conjunctions = {'and', 'but', 'so', 'because', 'or', 'that', 'if', 'when', 'while', 'then'}
@@ -58,7 +57,6 @@ class TranscriptionService:
                 clean_word = word_text.lower().strip(' .,!?;:"\'')
                 is_conjunction = clean_word in conjunctions
                 
-                # TIER 2: CONJUNCTION CUT (Using dynamic parameter)
                 if current_duration_pre >= conj_limit and is_conjunction and current_text:
                     refined_segments.append({
                         "start": current_start,
@@ -74,7 +72,6 @@ class TranscriptionService:
                 current_duration_post = w_end - current_start
                 has_punctuation = any(p in word_text for p in ['.', ',', '!', '?', ';', ':'])
                 
-                # TIER 1: PUNCTUATION CUT (Using dynamic parameter)
                 if current_duration_post >= punc_limit and has_punctuation:
                     refined_segments.append({
                         "start": current_start,
@@ -84,7 +81,6 @@ class TranscriptionService:
                     current_text = []
                     current_start = w_end
                     
-                # TIER 3: HARD CUT FAILSAFE (Using dynamic parameter)
                 elif current_duration_post >= max_duration:
                     refined_segments.append({
                         "start": current_start,
@@ -104,13 +100,22 @@ class TranscriptionService:
         return refined_segments
     
     
-    def extract_and_batch(self, audio_path: Path, min_duration: float = 40.0, max_duration: float = 60.0) -> Path:
+    def extract_and_batch(self, audio_path: Path, request_yaml: str = None, min_duration: float = 40.0, max_duration: float = 60.0) -> Path:
         print("\n--- AUDIO TRANSCRIPTION & SMART BATCHING ---")
         output_path = self.output_dir / "time_stamped_transcription.json"
         
         if not WHISPERX_AVAILABLE:
             print("[WARNING] Mocking Smart Batching...")
             return output_path
+
+        # Parse the YAML to grab the dynamic pacing frequency
+        try:
+            req_data = yaml.safe_load(request_yaml) if request_yaml else {}
+            target_freq = float(req_data.get('delivery', {}).get('timestamp_frequency_seconds', 4.5))
+        except Exception:
+            target_freq = 4.5
+            
+        print(f"[System] Pacing visual segments dynamically at ~{target_freq}s gaps based on YAML request...")
 
         print(f"Loading audio file: {audio_path.name}")
         audio = whisperx.load_audio(str(audio_path))
@@ -122,15 +127,18 @@ class TranscriptionService:
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
         aligned_result = whisperx.align(result["segments"], model_a, metadata, audio, self.device, return_char_alignments=False)
         
-        print("Enforcing 3-5s visual pacing at punctuation breaks...")
-        # paced_segments = self._enforce_segment_pacing(aligned_result["segments"], max_duration=4.5)
-        # Simply pass your desired thresholds here!
+        # Calculate intelligent back-off limits based on the requested frequency
+        punc_limit = max(1.5, target_freq * 0.75)
+        conj_limit = max(3.0, target_freq * 0.90)
+        
+        print("Enforcing dynamic visual pacing at grammatical breaks...")
         paced_segments = self._enforce_segment_pacing(
             aligned_result["segments"], 
-            punc_limit=8.0,   # 1.5    # Keeps phrases together even past periods/commas up to 8s
-            conj_limit=9.0,   # 3.0    # Keeps phrases together past "and/but" up to 9s
-            max_duration=10.0 # 4.5    # Hard cutoff ceiling at 10s
+            punc_limit=punc_limit,   
+            conj_limit=conj_limit,   
+            max_duration=target_freq 
         )
+        
         print("Executing Semantic Chunking (Smart Batching)...")
         batches = []
         current_batch = []
@@ -173,9 +181,6 @@ class TranscriptionService:
                     if not is_last_segment:
                         batch_start_time = paced_segments[i+1]['start']
 
-        # ==========================================
-        # CRITICAL FIX: FLUSH THE DANGLING LAST BATCH
-        # ==========================================
         if current_batch:
             remaining_duration = current_batch[-1].end - batch_start_time
             new_batch = AudioBatch(

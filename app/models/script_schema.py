@@ -1,21 +1,48 @@
 from pydantic import BaseModel, Field
 from typing import List
+from typing import Literal
+
+location: Literal[
+    "Opening",
+    "Chapter 1",
+    "Chapter 2",
+    "Chapter 3",
+    "Chapter 4",
+    "Chapter 5",
+    "Chapter 6",
+    "Chapter 7",
+    "Chapter 8",
+    "Chapter 9",
+    "Chapter 10",
+    "Ending",
+    "Entire Script"
+]
+
+class FixItem(BaseModel):
+    location: str
+    instruction: str
+
+class PreserveItem(BaseModel):
+    location: str
+    reason: str
+
 
 class RetentionMapItem(BaseModel):
-    section: str = Field(description="The section of the video (e.g., 'First 30s Hook', 'Middle Context', 'Ending')")
-    score: float = Field(description="Retention score out of 10.0 for this specific section")
+    section: str
+    score: float
+
 
 class ReviewResponse(BaseModel):
-    score: float = Field(description="Overall script score out of 10.0")
-    publish: bool = Field(description="True if the script is ready to be published, False otherwise")
-    reason: str = Field(description="A single sentence explaining the main reason for the publish decision")
-    retention_map: List[RetentionMapItem] = Field(description="A heat map of viewer retention across the script")
-    must_fix: List[str] = Field(description="Critical, non-negotiable editing tasks that must be executed")
-    should_fix: List[str] = Field(description="Minor improvements or stylistic suggestions")
-    preserve: List[str] = Field(description="Specific paragraphs, jokes, or metaphors that are perfect and MUST NOT be changed")
-    editor_strategy: str = Field(description="The macroscopic directive for the editor (e.g., 'Increase pace in the middle, keep the hook intact')")
-
-
+    score: float
+    publish: bool
+    publish_reason: str
+    configuration_violations: List[str]
+    retention_map: List[RetentionMapItem]
+    must_fix: List[FixItem]
+    should_fix: List[FixItem]
+    preserve: List[PreserveItem]
+    editor_strategy: str
+    
 class AudioSegment(BaseModel):
     segment_id: int
     start: float

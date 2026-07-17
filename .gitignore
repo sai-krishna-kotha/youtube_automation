@@ -1,7 +1,14 @@
 venv/
 __pycache__/
 assets/
-prompt_docs/
+assets_v1/
+prompt_docs_v1/
 .env
 node_modules/
 prompts/
+voices_test/
+gemini_session/
+gemini_session_jio/
+gemini_session_sm/
+generated_assets/
+promptss/
