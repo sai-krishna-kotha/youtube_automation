@@ -13,7 +13,7 @@ except ImportError:
 
 class GeminiImageScraper:
     def __init__(self, base_dir: Path):
-        self.session_dir = base_dir / "gemini_session_jio"
+        self.session_dir = base_dir / "gemini_session"
         self.new_chat_every_x = 15
         self.max_retries = 1
         self.limit_cooldown_seconds = 300
@@ -217,7 +217,7 @@ class GeminiImageScraper:
                             print(f"Failed completely after {self.max_retries} attempts. Moving to next prompt.")
 
                 print("Cooling down before next prompt...")
-                time.sleep(random.uniform(5, 10))
+                time.sleep(random.uniform(3, 6))
 
             context.close()
             print("\n[System] Image Batch processing complete!")
