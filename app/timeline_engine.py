@@ -103,13 +103,13 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
             sfx = AudioSegment.from_file(str(sfx_choice))
             
             # Lower the volume of the SFX by 6dB so it doesn't drown out your voiceover
-            sfx = sfx - 5 
+            sfx = sfx - 4 
             
             # Convert timestamp to milliseconds. 
             # Subtract 200ms so the whoosh peaks exactly as the visual cut happens
             insert_ms = int(start_time_sec * 1000) - 200 
             insert_ms = max(0, insert_ms)
-            print(f"\t\tsfx: {sfx_choice.name} added at {start_time_sec: 0.2f} for {prev_duration: 0.2f} duration")
+            print(f"\t\tsfx: {sfx_choice.name} added at {start_time_sec: 05.2f} for {prev_duration: 05.2f} duration")
             # Overlay the sound onto the main track
             main_audio = main_audio.overlay(sfx, position=insert_ms)
 
@@ -232,7 +232,7 @@ def build_video(project_dir: Path):
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='max(0,(iw-iw/zoom)-0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
 
             # Base visual chain
-            vf_chain = f"scale=8000:4500,{motion_filter},noise=alls=2:allf=t"
+            vf_chain = f"scale=6000:3375,{motion_filter},noise=alls=2:allf=t"
 
             fade_duration = 0.3
             fade_start = max(0.0, duration - fade_duration)

@@ -13,7 +13,7 @@ except ImportError:
 
 class GeminiImageScraper:
     def __init__(self, base_dir: Path):
-        self.session_dir = base_dir / "gemini_session"
+        self.session_dir = base_dir / "gemini_session_jio"
         self.new_chat_every_x = 12
         self.max_retries = 1
         self.limit_cooldown_seconds = 300
@@ -211,8 +211,8 @@ class GeminiImageScraper:
                         print(f"Error on attempt {attempt + 1}: {e}")
                         
                         # STATE SEVERING: If it failed for ANY reason, nuke the chat to prevent the ghost image from arriving late
-                        # print("Clearing state to prevent image bleed-over...")
-                        # self._click_new_chat(page)
+                        print("Clearing state to prevent image bleed-over...")
+                        self._click_new_chat(page)
                         
                         if attempt >= self.max_retries - 1:
                             print(f"Failed completely after {self.max_retries} attempts. Moving to next prompt.")
