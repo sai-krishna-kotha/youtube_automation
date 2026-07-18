@@ -1,4 +1,4 @@
-import os
+import sys
 import time
 import base64
 import re
@@ -14,7 +14,7 @@ except ImportError:
 class GeminiImageScraper:
     def __init__(self, base_dir: Path):
         self.session_dir = base_dir / "gemini_session"
-        self.new_chat_every_x = 15
+        self.new_chat_every_x = 12
         self.max_retries = 1
         self.limit_cooldown_seconds = 300
         self.HEADLESS_MODE = False
@@ -128,7 +128,7 @@ class GeminiImageScraper:
                         box.fill("") 
                         
                         # Type the prefix first
-                        box.press_sequentially("Create an image with this below prompt:", delay=random.randint(2, 5), timeout=0)
+                        box.press_sequentially("Directly Create an image with this below prompt:", delay=random.randint(2, 5), timeout=0)
                         
                         # Simulate Shift+Enter to drop down a line without submitting
                         page.keyboard.down("Shift")
@@ -197,6 +197,7 @@ class GeminiImageScraper:
                             latest_text = self._get_latest_response_text(page)
                             if "limit" in latest_text or "try again" in latest_text or "quota" in latest_text:
                                 print(f"RATE LIMIT DETECTED. Pausing script for {self.limit_cooldown_seconds / 60} minutes...")
+                                sys.exit(0)
                                 time.sleep(self.limit_cooldown_seconds)
                                 self._click_new_chat(page) 
                                 continue 
@@ -210,8 +211,8 @@ class GeminiImageScraper:
                         print(f"Error on attempt {attempt + 1}: {e}")
                         
                         # STATE SEVERING: If it failed for ANY reason, nuke the chat to prevent the ghost image from arriving late
-                        print("Clearing state to prevent image bleed-over...")
-                        self._click_new_chat(page)
+                        # print("Clearing state to prevent image bleed-over...")
+                        # self._click_new_chat(page)
                         
                         if attempt >= self.max_retries - 1:
                             print(f"Failed completely after {self.max_retries} attempts. Moving to next prompt.")
