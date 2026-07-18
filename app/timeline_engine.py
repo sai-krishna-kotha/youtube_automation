@@ -7,14 +7,15 @@ import shutil
 import wave
 from datetime import datetime
 from pathlib import Path
+from pydub import AudioSegment
 
 # ==========================================
 # SYSTEM CONFIGURATION
 # ==========================================
 # Your exact path to the FFmpeg executable
 FFMPEG_EXE = Path("C:/Users/kotha/Downloads/important/ffmpeg/bin/ffmpeg.exe")
+AudioSegment.converter = str(FFMPEG_EXE)
 # ==========================================
-
 def get_project_workspace(base_dir: Path) -> Path:
     """CLI to select the channel and project."""
     terminal_width = os.get_terminal_size().columns if os.isatty(sys.stdout.fileno()) else 80
@@ -70,6 +71,55 @@ def get_random_transition() -> str:
     choices = ["hard_cut", "hard_cut", "hard_cut", "flash_white", "fade_black"]
     return random.choice(choices)
 
+def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir: Path) -> Path:
+    """Dynamically overlays sound effects onto the master audio track."""
+    sfx_dir = base_dir / "assets" / "sfx"
+    mixed_audio_path = temp_dir / "mixed_audio.wav"
+    
+    # If no SFX folder or files exist, just return the original audio
+    if not sfx_dir.exists():
+        return master_audio_path
+        
+    # --- UPGRADE: Grab both .wav and .mp3 files ---
+    sfx_files = list(sfx_dir.glob("*.wav")) + list(sfx_dir.glob("*.mp3"))
+    if not sfx_files:
+        return master_audio_path
+
+    print("\n[Audio Engine] Mixing cinematic sound effects into master track...")
+    
+    # UPGRADE: Use from_file() so it handles the master track formats dynamically
+    main_audio = AudioSegment.from_file(str(master_audio_path))
+    
+    # Start from index 1 (we don't need a transition on the very first clip)
+    for i in range(1, len(parsed_data)):
+        prev_duration = parsed_data[i-1]["duration"]
+        start_time_sec = parsed_data[i]["time"]
+        
+        # LOGIC: Only add SFX if the previous clip was long (> 4 seconds) OR a 40% random chance
+        if prev_duration > 1.6 or random.random() < 0.60:
+            sfx_choice = random.choice(sfx_files)
+            
+            # --- UPGRADE: Use from_file() to seamlessly load either .mp3 or .wav ---
+            sfx = AudioSegment.from_file(str(sfx_choice))
+            
+            # Lower the volume of the SFX by 6dB so it doesn't drown out your voiceover
+            sfx = sfx - 5 
+            
+            # Convert timestamp to milliseconds. 
+            # Subtract 200ms so the whoosh peaks exactly as the visual cut happens
+            insert_ms = int(start_time_sec * 1000) - 200 
+            insert_ms = max(0, insert_ms)
+            print(f"\t\tsfx: {sfx_choice.name} added at {start_time_sec: 0.2f} for {prev_duration: 0.2f} duration")
+            # Overlay the sound onto the main track
+            main_audio = main_audio.overlay(sfx, position=insert_ms)
+
+    # Export the newly mixed track as a fresh .wav file for FFmpeg
+    main_audio.export(str(mixed_audio_path), format="wav")
+    print("[Audio Engine] Master track mixdown complete!")
+    
+    return mixed_audio_path
+
+
 def build_video(project_dir: Path):
     if not FFMPEG_EXE.exists():
         print(f"\n[!] ERROR: FFmpeg not found at {FFMPEG_EXE}")
@@ -80,8 +130,8 @@ def build_video(project_dir: Path):
     temp_dir = project_dir / "temp_video_clips"
     channel_name = project_dir.parent.name.lower()
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    final_output = project_dir / f"FINAL_{project_dir.name}_{timestamp}.mp4"
+    timestamp = datetime.now().strftime("%Y-%m-%d_at_%I-%M-%p")    
+    final_output = project_dir / f"video_{timestamp}.mp4"
 
     if not upscale_dir.exists() or not any(upscale_dir.iterdir()):
         print("\n[!] ERROR: '3_upscaled' folder is empty. Run Module 2 first.")
@@ -115,7 +165,17 @@ def build_video(project_dir: Path):
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
+    base_dir = project_dir.parent.parent.parent.parent
+    # print(f"Base dir is :{base_dir}\n")
+    sfx_enabled_channels = ["tech", "huh"]
     
+    # Check if the current channel name contains any of those keywords
+    if any(keyword in channel_name for keyword in sfx_enabled_channels):
+        print(f"\n[Audio Engine] Fast-paced channel detected ({channel_name}). Enabling SFX...")
+        final_audio_path = mix_sfx_track(parsed_data, audio_path, temp_dir, base_dir)
+    else:
+        print(f"\n[Audio Engine] Storytelling channel detected ({channel_name}). Bypassing SFX for clean audio.")
+        final_audio_path = audio_path    
     blueprint_lines = []
     
     # --- CHANNEL LOGIC & POOL PRINTING ---
@@ -204,7 +264,7 @@ def build_video(project_dir: Path):
             print(result.stderr)
             sys.exit(1)
             
-        blueprint_lines.append(f"file '{clip_path.absolute().as_posix()}'")
+        blueprint_lines.append(f"file '{clip_path.name}'")
         incoming_transition = out_transition
 
     print("\n\n[Engine] Clean micro-clips generated successfully!")
@@ -215,7 +275,7 @@ def build_video(project_dir: Path):
 
     print("[Engine] Executing lightning timeline merge and mapping master studio audio...")
     concat_cmd = (
-        f'"{FFMPEG_EXE}" -f concat -safe 0 -i "{blueprint_path}" -i "{audio_path}" '
+        f'"{FFMPEG_EXE}" -f concat -safe 0 -i "{blueprint_path}" -i "{final_audio_path}" '
         f'-c:v copy -c:a aac -shortest -y "{final_output}"'
     )
     
