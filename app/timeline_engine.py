@@ -16,6 +16,7 @@ from pydub import AudioSegment
 FFMPEG_EXE = Path("C:/Users/kotha/Downloads/important/ffmpeg/bin/ffmpeg.exe")
 AudioSegment.converter = str(FFMPEG_EXE)
 # ==========================================
+
 def get_project_workspace(base_dir: Path) -> Path:
     """CLI to select the channel and project."""
     terminal_width = os.get_terminal_size().columns if os.isatty(sys.stdout.fileno()) else 80
@@ -67,8 +68,8 @@ def get_smart_motion_style(last_style: str) -> str:
         return "zoom_in"
 
 def get_random_transition() -> str:
-    """Weighted randomness for transitions. Hard cuts are most common to keep it professional."""
-    choices = ["hard_cut", "hard_cut", "hard_cut", "flash_white", "fade_black"]
+    """Weighted randomness for transitions. 40% black fade, 40% white fade, 20% hard cuts."""
+    choices = ["hard_cut", "flash_white", "flash_white", "fade_black", "fade_black"]
     return random.choice(choices)
 
 def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir: Path) -> Path:
@@ -96,13 +97,13 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
         start_time_sec = parsed_data[i]["time"]
         
         # LOGIC: Only add SFX if the previous clip was long (> 4 seconds) OR a 40% random chance
-        if prev_duration > 1.6 or random.random() < 0.60:
+        if prev_duration > 2.0:
             sfx_choice = random.choice(sfx_files)
             
             # --- UPGRADE: Use from_file() to seamlessly load either .mp3 or .wav ---
             sfx = AudioSegment.from_file(str(sfx_choice))
             
-            # Lower the volume of the SFX by 6dB so it doesn't drown out your voiceover
+            # Lower the volume of the SFX by 4dB so it doesn't drown out your voiceover
             sfx = sfx - 4 
             
             # Convert timestamp to milliseconds. 
@@ -119,7 +120,6 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
     
     return mixed_audio_path
 
-
 def build_video(project_dir: Path):
     if not FFMPEG_EXE.exists():
         print(f"\n[!] ERROR: FFmpeg not found at {FFMPEG_EXE}")
@@ -131,7 +131,7 @@ def build_video(project_dir: Path):
     channel_name = project_dir.parent.name.lower()
     
     timestamp = datetime.now().strftime("%Y-%m-%d_at_%I-%M-%p")    
-    final_output = project_dir / f"video_{timestamp}.mp4"
+    base_video_name = f"video_{timestamp}"
 
     if not upscale_dir.exists() or not any(upscale_dir.iterdir()):
         print("\n[!] ERROR: '3_upscaled' folder is empty. Run Module 2 first.")
@@ -166,20 +166,26 @@ def build_video(project_dir: Path):
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
     base_dir = project_dir.parent.parent.parent.parent
-    # print(f"Base dir is :{base_dir}\n")
-    sfx_enabled_channels = ["tech", "huh"]
     
-    # Check if the current channel name contains any of those keywords
+    sfx_enabled_channels = ["tech", "huh", "doodle"]
+    audio_tracks = [] # Queue to hold multiple audio versions if needed
+    
+    # --- AUDIO ROUTING LOGIC ---
     if any(keyword in channel_name for keyword in sfx_enabled_channels):
         print(f"\n[Audio Engine] Fast-paced channel detected ({channel_name}). Enabling SFX...")
-        final_audio_path = mix_sfx_track(parsed_data, audio_path, temp_dir, base_dir)
+        mixed_audio_path = mix_sfx_track(parsed_data, audio_path, temp_dir, base_dir)
+        # Render BOTH versions for A/B testing
+        audio_tracks.append((mixed_audio_path, "_WITH_SFX"))
+        audio_tracks.append((audio_path, "_CLEAN"))
     else:
         print(f"\n[Audio Engine] Storytelling channel detected ({channel_name}). Bypassing SFX for clean audio.")
-        final_audio_path = audio_path    
+        # Render ONLY clean version
+        audio_tracks.append((audio_path, "_CLEAN"))
+        
     blueprint_lines = []
     
     # --- CHANNEL LOGIC & POOL PRINTING ---
-    is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech"])
+    is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech", "doodle"])
     
     print(f"\n[Engine] Channel Detected: {channel_name.upper()}")
     print(f"[Engine] Audio Duration: {total_audio_time:.2f} seconds")
@@ -188,7 +194,7 @@ def build_video(project_dir: Path):
         print("\n=== ACTIVE CINEMATIC EFFECT POOLS ===")
         print(" -> Camera Motions: [Zoom In, Zoom Out, Pan Left->Right, Pan Right->Left]")
         print(" -> Math Profile: Constant Speed (Frame-Locked, Crash-Proof Bounds)")
-        print(" -> Transitions: [Hard Cut (60%), White Flash (20%), Black Fade (20%)]")
+        print(" -> Transitions: [Hard Cut (20%), White Flash (40%), Black Fade (40%)]")
         print(" -> Texture: 2% Subtle 35mm Film Grain")
         print("=====================================\n")
     else:
@@ -231,7 +237,7 @@ def build_video(project_dir: Path):
             else: # pan_rl
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='max(0,(iw-iw/zoom)-0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
 
-            # Base visual chain
+            # Base visual chain - Scaled to 6000x3375 to prevent RAM crashes while maintaining 4K quality
             vf_chain = f"scale=6000:3375,{motion_filter},noise=alls=2:allf=t"
 
             fade_duration = 0.3
@@ -273,20 +279,29 @@ def build_video(project_dir: Path):
     with open(blueprint_path, "w") as f:
         f.write("\n".join(blueprint_lines))
 
-    print("[Engine] Executing lightning timeline merge and mapping master studio audio...")
-    concat_cmd = (
-        f'"{FFMPEG_EXE}" -f concat -safe 0 -i "{blueprint_path}" -i "{final_audio_path}" '
-        f'-c:v copy -c:a aac -shortest -y "{final_output}"'
-    )
+    print("\n[Engine] Executing lightning timeline merge and mapping master studio audio...")
     
-    final_result = subprocess.run(concat_cmd, shell=True, capture_output=True, text=True)
-    if final_result.returncode != 0:
-        print(f"\n\n[FATAL ERROR] FFmpeg Concat Failed:")
-        print(final_result.stderr)
-        sys.exit(1)
+    # --- MULTI-TRACK RENDER LOOP ---
+    for audio_track_path, suffix in audio_tracks:
+        final_output = project_dir / f"{base_video_name}{suffix}.mp4"
+        print(f"  -> Rendering {suffix.replace('_', ' ').strip()} version...")
+        
+        concat_cmd = (
+            f'"{FFMPEG_EXE}" -f concat -safe 0 -i "{blueprint_path}" -i "{audio_track_path}" '
+            f'-c:v copy -c:a aac -shortest -y "{final_output}"'
+        )
+        
+        final_result = subprocess.run(concat_cmd, shell=True, capture_output=True, text=True)
+        if final_result.returncode != 0:
+            print(f"\n\n[FATAL ERROR] FFmpeg Concat Failed for {suffix}:")
+            print(final_result.stderr)
+            sys.exit(1)
+            
+        print(f"  [SUCCESS] Saved: {final_output.name}")
 
-    print(f"\n[SUCCESS] Final Video Rendered: {final_output.name}")
+    # Cleanup temp files after all versions are rendered
     shutil.rmtree(temp_dir)
+    print(f"\n[SUCCESS] Factory Pipeline Complete!")
 
 def main():
     base_dir = Path(__file__).resolve().parent.parent
