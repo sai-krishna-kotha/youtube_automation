@@ -258,9 +258,10 @@ def build_video(project_dir: Path):
         sys.stdout.write(f"\r  -> [{motion_style.upper()}] | Ends w/ {out_transition} | Rendering clip {i+1}/{len(parsed_data)} ({duration}s)...")
         sys.stdout.flush()
 
+        # UPDATED: Using h264_nvenc instead of libx264 for hardware acceleration!
         cmd = (
             f'"{FFMPEG_EXE}" -loop 1 -i "{img_path}" '
-            f'-vf "{vf_chain}" -c:v libx264 -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
+            f'-vf "{vf_chain}" -c:v h264_nvenc -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
         )
         
         # ERROR TRAP
