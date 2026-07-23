@@ -51,6 +51,7 @@ class AudioSegment(BaseModel):
 
 class AudioBatch(BaseModel):
     batch_id: int
+    length: int
     start_time: float
     end_time: float
     duration: float
