@@ -140,12 +140,29 @@ class ImagePromptService:
                 for s in shots:
                     all_shots_so_far.append(SingleShotPrompt(**s))
                     
+            # Sort the shots chronologically
             all_shots_so_far.sort(key=lambda x: x.start_time)
+            
+            # Extract the absolute final end time from the original transcription data
+            final_end_time = batches[-1]['end_time'] if batches else 0.0
             
             txt_output_path = self.output_dir / "time_stamped_prompts.txt"
             with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
-                for shot in all_shots_so_far:
-                    txt_file.write(f"[{shot.start_time}] {shot.image_prompt}\n")
+                for i, shot in enumerate(all_shots_so_far):
+                    current_start = shot.start_time
+                    
+                    # Look-ahead logic for continuous cuts
+                    if i < len(all_shots_so_far) - 1:
+                        visual_end = all_shots_so_far[i+1].start_time
+                    else:
+                        visual_end = final_end_time
+                        
+                    # Format for safe filenames (replace dots with underscores)
+                    safe_start = str(current_start).replace('.', '_')
+                    safe_end = str(visual_end).replace('.', '_')
+                    
+                    # Write the new format
+                    txt_file.write(f"[{safe_start}-{safe_end}] {shot.image_prompt}\n")
                     
             print(f" -> Incremental save: time_stamped_prompts.txt updated.")
 
