@@ -92,9 +92,12 @@ def setup_channel(base_dir: Path) -> tuple[Path, Path, Path, str]:
             print("Invalid selection.")
             sys.exit(1)
     else:
-        channel_name = channel_input
-        if channel_name not in existing_channels:
+        channel_name = channel_input.strip()
+        if channel_name and (channel_name not in existing_channels):
             is_new = True
+        else:
+            print("Enter a valid Channel number or name!!")
+            sys.exit(0)
 
     channel_dir = channels_dir / channel_name
     channel_slug = re.sub(r'[^\w\s-]', '', channel_name).strip().replace(" ", "_").lower()
@@ -202,9 +205,12 @@ def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
         hook_paragraph = video_data.get('hook_paragraph')
         video_length = video_data.get('target_duration_minutes', 3)
         upscaler_model = video_data.get('upscaler_model', 'realesrgan-x4plus-anime')
-        voice = voice_data.get('kokoro_model', 'af_bella')
+        
+        # Look for voice_model, fallback to kokoro_model for backwards compatibility
+        voice = voice_data.get('voice_model', voice_data.get('kokoro_model', 'af_bella'))
         speed = voice_data.get('speed', 1.0)
-
+        enable_wm_remover = video_data.get('enable_watermark_remover', True)
+        
         max_num = 0
         if channel_output_base.exists():
             for d in channel_output_base.iterdir():
@@ -235,8 +241,9 @@ def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
             "hook_paragraph": hook_paragraph,
             "target_minutes": video_length,
             "audio_voice": voice,
-            "upscaler_model": upscaler_model, # <--- Add this line
+            "upscaler_model": upscaler_model, 
             "audio_speed": speed,
+            "enable_watermark_remover": enable_wm_remover,
             "request_file_used": selected_request_path.name
         }
         with open(run_dir / "run_config.json", "w") as f:
@@ -268,8 +275,8 @@ def main():
     video_length = config["target_minutes"]
     audio_voice = config["audio_voice"]
     audio_speed = config.get("audio_speed", 1.0) 
-    target_upscaler = config.get("upscaler_model", "realesrgan-x4plus-anime") # <--- Add this line
-    
+    target_upscaler = config.get("upscaler_model", "realesrgan-x4plus-anime") 
+    enable_watermark_remover = config.get("enable_watermark_remover", True)
     request_filename = config.get("request_file_used")
     
     if not request_filename:
@@ -365,10 +372,10 @@ def main():
         # --- MODULE 2: AUDIO ---
         existing_audio = list(current_run_dir.glob("*.wav"))
         if existing_audio:
-            print(f"[Checkpoint] Existing audio found ({existing_audio[0].name}). Skipping Kokoro Initialization...")
+            print(f"[Checkpoint] Existing audio found ({existing_audio[0].name}). Skipping TTS Initialization...")
             audio_path = existing_audio[0] 
         else:
-            print("\n[Engine] Initializing Kokoro TTS Pipeline...")
+            print("\n[Engine] Initializing Smart TTS Pipeline...")
             from app.services.audio_service import AudioGenerationService
             audio_engine = AudioGenerationService(output_dir=current_run_dir) 
             audio_path = audio_engine.generate_audio(text=final_script, voice=audio_voice, speed=audio_speed)
@@ -578,7 +585,19 @@ def main():
             generate_video = '1'
         
         if p2_choice in ['1', '2']:
-            m2.run_watermark_removal(raw_dir, wm_dir)
+            if manual_mode:
+                current_state = "1" if enable_watermark_remover else "0"
+                override = input(f"\nRun watermark remover? (1: Yes, 0: No) [Current: {current_state}]: ").strip()
+                if override == '0':
+                    enable_watermark_remover = False
+                elif override == '1':
+                    enable_watermark_remover = True
+
+            # Execute or bypass based on the final toggle state
+            if enable_watermark_remover:
+                m2.run_watermark_removal(raw_dir, wm_dir)
+            else:
+                print("\n[System] Watermark removal toggled OFF. Bypassing directly to upscaler...")
             
         if p2_choice in ['1', '3']:
             source_dir = wm_dir if wm_dir.exists() and any(wm_dir.iterdir()) else raw_dir
