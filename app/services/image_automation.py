@@ -16,28 +16,21 @@ class GeminiImageScraper:
         self.base_dir = base_dir
         
         # --- STRICT ACCOUNT PRIORITY LIST ---
-        # Add your folder names here in the EXACT order you want them used.
-        # Do NOT include the accounts you use for daily coding/urgent tasks to protect their rate limits.
         self.account_order = [
             "gemini_session_sm",
             "gemini_session",
             "gemini_session_pp",
             "gemini_session_jio",
-            # Add more here as needed: "Gemini_Session_Burner1", etc.
         ]
         
-        # Map the folder names to actual Path objects
         self.session_directories = [base_dir / name for name in self.account_order]
         
-        # Verify the folders actually exist before starting
         missing_folders = [d.name for d in self.session_directories if not d.exists()]
         if missing_folders:
             print(f"[Warning] The following account folders were not found in {base_dir}:")
             for missing in missing_folders:
                 print(f" - {missing}")
-            print("Make sure to run setup_session() for these accounts if you want to use them.\n")
 
-        # Fallback just in case the list is empty or folders don't exist
         valid_sessions = [d for d in self.session_directories if d.exists()]
         if not valid_sessions:
             print("[Warning] No valid session folders found. Defaulting to Gemini_Session_1")
@@ -46,7 +39,6 @@ class GeminiImageScraper:
             self.session_directories = valid_sessions
 
         self.current_session_idx = 0
-        # Renamed back to session_dir so master_forge.py doesn't crash!
         self.session_dir = self.session_directories[self.current_session_idx]
 
         self.new_chat_every_x = 12
@@ -62,7 +54,7 @@ class GeminiImageScraper:
             print("Resetting context: Severing state to prevent bleed-over...")
             page.goto("https://gemini.google.com/", wait_until="domcontentloaded")
             page.wait_for_selector('div[role="textbox"]', timeout=15000)
-            time.sleep(2)
+            time.sleep(2.5) # Giving a human-like pause after loading
         except Exception as e:
             print(f"Warning: Failed to reset chat. Error: {e}")
 
@@ -80,11 +72,10 @@ class GeminiImageScraper:
             return ""
 
     def _switch_account(self, playwright_instance, current_context):
-        """Closes the current session and boots up the next available Google account."""
+        """Closes current session and boots up the next available Google account."""
         print(f"\n[Engine] Closing rate-limited session: {self.session_dir.name}")
         current_context.close()
 
-        # Rotate to the next index
         self.current_session_idx = (self.current_session_idx + 1) % len(self.session_directories)
         self.session_dir = self.session_directories[self.current_session_idx]
 
@@ -105,14 +96,13 @@ class GeminiImageScraper:
         return new_context, new_page
 
     def setup_session(self):
-        """Phase 0: Run this to log in to a specific account and save its cookies."""
+        """Phase 0: Log in to a specific account and save cookies."""
         print("\n--- GEMINI MULTI-ACCOUNT SETUP ---")
-        print("Your configured priority list:")
         for d in self.account_order:
             status = "[Exists]" if (self.base_dir / d).exists() else "[Missing]"
             print(f" - {d} {status}")
             
-        new_name = input("\nEnter the folder name to setup/login (must match your list, e.g., Gemini_Session_SM): ").strip()
+        new_name = input("\nEnter folder name to setup/login (e.g., gemini_session_sm): ").strip()
         if not new_name:
             print("Aborted.")
             return
@@ -120,10 +110,10 @@ class GeminiImageScraper:
         target_dir = self.base_dir / new_name
 
         with sync_playwright() as p:
-            print(f"\nLaunching browser for '{new_name}'... Please log in to your Google account.")
+            print(f"\nLaunching browser for '{new_name}'... Please log in.")
             context = p.chromium.launch_persistent_context(
                 user_data_dir=str(target_dir),
-                headless=False, # Force visible for manual login
+                headless=False,
                 viewport={"width": 1280, "height": 720},
                 args=["--disable-blink-features=AutomationControlled"],
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -131,12 +121,12 @@ class GeminiImageScraper:
             page = context.new_page()
             page.goto("https://gemini.google.com")
             
-            input("\n👉 Log in fully. Once you see the Gemini dashboard, press ENTER here to save and exit...")
+            input("\n👉 Log in fully. Once you see the Gemini dashboard, press ENTER here...")
             context.close()
             print(f"[System] Session '{new_name}' saved successfully!")
 
     def generate_images(self, input_file: Path, output_dir: Path):
-        """Phase 2: The automated image scraping loop with Auto-Account Rotation."""
+        """Phase 2: High-speed reactive image scraping loop with Human Pacing."""
         if not self.session_directories:
             raise Exception("\n[!] No session data found. Run setup_session() first!")
         
@@ -162,7 +152,6 @@ class GeminiImageScraper:
             page.goto("https://gemini.google.com", wait_until="domcontentloaded")
             page.wait_for_selector('div[role="textbox"]', timeout=15000)
 
-            # Using a while loop so we can retry the EXACT same line if an account swaps
             line_idx = 0 
             while line_idx < len(lines):
                 line = lines[line_idx]
@@ -175,7 +164,6 @@ class GeminiImageScraper:
                 file_name = f"[{self._get_clean_name(timestamp)}]_image.png"
                 output_path = output_dir / file_name
 
-                # --- SMART RESUME ---
                 if output_path.exists():
                     print(f"\n[{line_idx+1}/{len(lines)}] SKIPPING: {file_name} already exists.")
                     line_idx += 1
@@ -185,10 +173,8 @@ class GeminiImageScraper:
                     self._click_new_chat(page)
 
                 print(f"\nProcessing [{line_idx+1}/{len(lines)}] via {self.session_dir.name}: {file_name}")
-                
                 rate_limit_triggered = False
 
-                # --- RETRY LOOP ---
                 for attempt in range(self.max_retries):
                     try:
                         # 1. BUBBLE ISOLATION
@@ -196,57 +182,80 @@ class GeminiImageScraper:
                         bubble_count_before = page.evaluate(js_get_bubble_count)
                         
                         try:
-                            page.wait_for_selector('button[aria-label*="Stop"], button[aria-label*="stop"]', state="hidden", timeout=30000)
+                            page.wait_for_selector('button[aria-label*="Stop"], button[aria-label*="stop"]', state="hidden", timeout=15000)
                         except Exception:
                             pass 
 
-                        # 2. Type and send the prompt
+                        # 2. HYBRID PROMPT INJECTION (Human-paced typing + instant prompt paste)
                         box = page.locator('div[role="textbox"]')
                         box.wait_for(state="visible", timeout=10000)
                         box.click()
-                        box.fill("") 
+                        box.fill("")
+                        time.sleep(1)
                         
-                        box.press_sequentially("Directly Create an image with this below prompt:", delay=random.randint(2, 5), timeout=0)
+                        # Step A: Type prefix slowly like a real human (50ms to 100ms per character)
+                        prefix = "Directly Create an image with this below prompt:"
+                        box.press_sequentially(prefix, delay=random.randint(50, 100))
+                        time.sleep(0.5) # Take a breath
                         
+                        # Step B: Perform explicit Shift + Enter
                         page.keyboard.down("Shift")
                         page.keyboard.press("Enter")
                         page.keyboard.up("Shift")
+                        time.sleep(0.5) # Take a breath
                         
-                        box.press_sequentially(prompt, delay=random.randint(2, 5), timeout=0)
+                        # Step C: Instant insert of the 800-character prompt
+                        page.keyboard.insert_text(prompt)
+                        time.sleep(1.0) # Pause after pasting a huge wall of text
                         
+                        # Step D: Type final space to ensure UI state activation
+                        page.keyboard.press("Space")
+                        time.sleep(1.0) # Hover over the send button...
+
                         send_button = page.locator('button[aria-label*="Send message"], button[aria-label*="Send"], button[title*="Send"]')
-                        send_button.wait_for(state="visible", timeout=15000)
-                        time.sleep(0.5)
+                        send_button.wait_for(state="visible", timeout=10000)
                         send_button.click()
                         
-                        print(f"Generating (Attempt {attempt + 1}/{self.max_retries})...")
-                        start = time.time()
-                        found = False
-                        
-                        # 3. POLL FOR IMAGE BUBBLE
-                        while time.time() - start < 85:
-                            js_check_new_bubble = f"""() => {{
-                                const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
-                                if (blocks.length <= {bubble_count_before}) return false; 
-                                
-                                const latestBlock = blocks[blocks.length - 1];
-                                const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => i.width > 150 && i.complete);
-                                return imgs.length > 0;
-                            }}"""
+                        print(f"Generating (Attempt {attempt + 1}/{self.max_retries})... Waiting for image DOM node...")
+
+                        # 3. REACTIVE DOM OBSERVER
+                        js_wait_condition = f"""() => {{
+                            const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
+                            if (blocks.length <= {bubble_count_before}) return false;
                             
-                            if page.evaluate(js_check_new_bubble):
-                                found = True
-                                time.sleep(3) 
-                                break
-                            time.sleep(2)
-                        
-                        if found:
-                            # 4. EXTRACT IMAGE
-                            time.sleep(4)
-                            js_extract = f"""() => {{
+                            const latestBlock = blocks[blocks.length - 1];
+                            
+                            // Check for fully loaded image node
+                            const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => 
+                                i.complete && (i.naturalWidth > 150 || i.width > 150)
+                            );
+                            if (imgs.length > 0) return "IMAGE_READY";
+                            
+                            // Check for error text / policy / rate limit
+                            const txt = latestBlock.innerText.toLowerCase();
+                            if (txt.includes("limit") || txt.includes("quota") || txt.includes("try again")) return "RATE_LIMIT";
+                            if (txt.includes("can't") || txt.includes("cannot") || txt.includes("policy") || txt.includes("refuse")) return "POLICY_BLOCK";
+                            
+                            return false;
+                        }}"""
+
+                        try:
+                            dom_status = page.wait_for_function(js_wait_condition, timeout=120000).json_value()
+                        except Exception:
+                            dom_status = "TIMEOUT"
+
+                        if dom_status == "IMAGE_READY":
+                            # 🛑 DEFINITE HARD WAIT: Gives the browser GPU plenty of time to paint the pixels
+                            print("  [Wait] Image detected. Giving it 6 seconds to fully render to prevent corruption...")
+                            time.sleep(10.0)
+                            
+                            # 4. EXTRACT CANVAS DATA
+                            js_extract = """() => {
                                 const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
                                 const latestBlock = blocks[blocks.length - 1];
-                                const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => i.width > 150 && i.complete);
+                                const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => 
+                                    i.complete && (i.naturalWidth > 150 || i.width > 150)
+                                );
                                 
                                 if (imgs.length === 0) return null;
                                 const targetImg = imgs[0]; 
@@ -254,45 +263,42 @@ class GeminiImageScraper:
                                 const canvas = document.createElement('canvas');
                                 canvas.width = targetImg.naturalWidth || targetImg.width;
                                 canvas.height = targetImg.naturalHeight || targetImg.height;
-                                canvas.getContext('2d').drawImage(targetImg, 0, 0);
+                                const ctx = canvas.getContext('2d');
+                                ctx.drawImage(targetImg, 0, 0);
                                 return canvas.toDataURL('image/png');
-                            }}"""
+                            }"""
                             
                             data = page.evaluate(js_extract)
                             if data:
                                 header, encoded = data.split(",", 1)
                                 with open(output_path, 'wb') as f:
                                     f.write(base64.b64decode(encoded))
-                                print(f"Success! Saved to: {output_path.name}")
+                                print(f"  [✓] Success! Image rendered & saved perfectly to: {output_path.name}")
                                 break 
                             else:
                                 raise Exception("Failed to pull canvas data.")
+
+                        elif dom_status == "RATE_LIMIT":
+                            print(f"  [!] RATE LIMIT DETECTED on account: {self.session_dir.name}")
+                            rate_limit_triggered = True
+                            break
+
+                        elif dom_status == "POLICY_BLOCK":
+                            print("  [!] CONTENT POLICY BLOCK: Gemini refused this prompt. Skipping.")
+                            break
+
                         else:
-                            latest_text = self._get_latest_response_text(page)
-                            if "limit" in latest_text or "try again" in latest_text or "quota" in latest_text:
-                                print(f"[!] RATE LIMIT DETECTED on account: {self.session_dir.name}")
-                                rate_limit_triggered = True
-                                break # Break the attempt loop to trigger account rotation
-                                
-                            elif "can't" in latest_text or "cannot" in latest_text or "policy" in latest_text:
-                                print("[!] CONTENT POLICY BLOCK: Gemini refused to generate this image. Skipping prompt.")
-                                break 
-                            else:
-                                raise Exception("Generation timed out.")
+                            raise Exception("Generation timed out (No image node created within 120s).")
 
                     except Exception as e:
-                        print(f"Error on attempt {attempt + 1}: {e}")
-                        print("Clearing state to prevent image bleed-over...")
+                        print(f"  [Error] Attempt {attempt + 1}: {e}")
                         self._click_new_chat(page)
-                        
                         if attempt >= self.max_retries - 1:
-                            print(f"Failed completely after {self.max_retries} attempts. Moving to next prompt.")
+                            print(f"  [!] Prompt failed after {self.max_retries} attempts. Moving on.")
 
                 # --- MULTI-ACCOUNT ROTATION LOGIC ---
                 if rate_limit_triggered:
                     if len(self.session_directories) > 1:
-                        # Swap accounts and loop back around. We DO NOT increment line_idx, 
-                        # so the engine tries this exact same image prompt again on the new account.
                         context, page = self._switch_account(p, context)
                         continue 
                     else:
@@ -301,11 +307,12 @@ class GeminiImageScraper:
                         self._click_new_chat(page)
                         continue
                 
-                # If we successfully made the image (or got a hard policy block), move to the next prompt
                 line_idx += 1
                 
-                print("Cooling down before next prompt...")
-                time.sleep(random.uniform(3, 6))
+                # Human wait between prompts
+                cooldown = random.uniform(3.0, 7.0)
+                print(f"Cooling down for {cooldown:.1f}s before next prompt...")
+                time.sleep(cooldown)
 
             context.close()
             print("\n[System] Image Batch processing complete!")
