@@ -49,8 +49,6 @@ def get_project_workspace(base_dir: Path) -> Path:
     p_idx = int(input("\nProject Number: ").strip()) - 1
     return existing_projects[p_idx]
 
-import subprocess
-from pathlib import Path
 
 def run_watermark_removal(raw_dir: Path, output_dir: Path):
     """Executes the node-based gwr image utility to strip watermarks locally."""
@@ -77,6 +75,8 @@ def run_watermark_removal(raw_dir: Path, output_dir: Path):
             continue
 
     print("[Factory] Watermark Removal Complete!")
+
+
 def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path, upscaler_model: str = "realesrgan-x4plus-anime"):
     """Executes Real-ESRGAN in a safe temp directory with Smart Resume and dynamic models."""
     print(f"\n[Factory] Starting 4K Upscaling (Model: {upscaler_model})...")
@@ -129,14 +129,14 @@ def run_upscaler(input_dir: Path, output_dir: Path, temp_dir: Path, upscaler_mod
             
             
 def run_renamer(input_dir: Path, output_dir: Path):
-    """Converts [125_45]_img_1.jpeg to human-readable 02_05_45_01.png with Smart Resume"""
+    """Converts [0_43-41_62]_image.png to human-readable Clip_00m00s_to_00m41s.png with Smart Resume"""
     print("\n[Factory] Translating timestamps for human editors...")
     output_dir.mkdir(exist_ok=True)
     
     images = [f for f in input_dir.iterdir() if f.is_file()]
     
-    # Regex to catch: [0_45]_img_1.jpeg
-    pattern = re.compile(r'\[(\d+)_(\d+)\](?:_img_(\d+))?')
+    # Regex to catch both the old format [0_45] and the new gapless format [0_45-41_62]
+    pattern = re.compile(r'\[(\d+)_(\d+)(?:-(\d+)_(\d+))?\]')
     
     processed_count = 0
     skipped_count = 0
@@ -144,14 +144,25 @@ def run_renamer(input_dir: Path, output_dir: Path):
     for img in images:
         match = pattern.search(img.name)
         if match:
-            total_seconds = int(match.group(1))
-            ms = match.group(2)
-            index = int(match.group(3)) if match.group(3) else 1
+            start_sec = int(match.group(1))
+            start_ms = match.group(2)
             
-            mins = total_seconds // 60
-            secs = total_seconds % 60
+            s_mins = start_sec // 60
+            s_secs = start_sec % 60
             
-            new_name = f"{mins:02d}_{secs:02d}_{ms}_{index:02d}{img.suffix}"
+            # If the new [start-end] format is detected
+            if match.group(3) and match.group(4):
+                end_sec = int(match.group(3))
+                end_ms = match.group(4)
+                
+                e_mins = end_sec // 60
+                e_secs = end_sec % 60
+                
+                new_name = f"Clip_{s_mins:02d}m{s_secs:02d}s_{start_ms}_to_{e_mins:02d}m{e_secs:02d}s_{end_ms}{img.suffix}"
+            else:
+                # Fallback for old format
+                new_name = f"{s_mins:02d}_{s_secs:02d}_{start_ms}_01{img.suffix}"
+                
             target_path = output_dir / new_name
             
             # SMART RESUME CHECK

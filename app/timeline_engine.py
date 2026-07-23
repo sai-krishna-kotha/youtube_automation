@@ -137,30 +137,33 @@ def build_video(project_dir: Path):
         print("\n[!] ERROR: '3_upscaled' folder is empty. Run Module 2 first.")
         return
 
-    # --- 1. PARSE TIMESTAMPS ---
+    # --- 1. PARSE TIMESTAMPS & EXACT DURATIONS ---
     images = [f for f in upscale_dir.iterdir() if f.suffix.lower() in ['.png', '.jpg', '.jpeg']]
-    pattern = re.compile(r'\[(\d+)_(\d+)\]')
+    
+    # Match the gapless format: [start-end]
+    pattern = re.compile(r'\[([\d_]+)-([\d_]+)\]')
     
     parsed_data = []
     for img in images:
         match = pattern.search(img.name)
         if match:
-            absolute_time = float(f"{int(match.group(1))}.{int(match.group(2))}")
-            parsed_data.append({"path": img, "time": absolute_time})
+            start_sec = float(match.group(1).replace('_', '.'))
+            end_sec = float(match.group(2).replace('_', '.'))
+            
+            # Duration is flawlessly extracted directly from the filename
+            duration = max(0.5, round(end_sec - start_sec, 3))
+            
+            parsed_data.append({
+                "path": img, 
+                "time": start_sec, 
+                "duration": duration
+            })
 
+    # Sort chronologically
     parsed_data.sort(key=lambda x: x["time"])
     
-    # --- 2. DURATIONS ---
+    # Define total_audio_time for logging and final duration fallback if needed
     total_audio_time = get_audio_duration(audio_path)
-    parsed_data[0]["time"] = 0.0
-
-    for i in range(len(parsed_data)):
-        start_time = parsed_data[i]["time"]
-        if i == len(parsed_data) - 1:
-            duration = total_audio_time - start_time
-        else:
-            duration = parsed_data[i+1]["time"] - start_time
-        parsed_data[i]["duration"] = max(0.5, round(duration, 3))
 
     if temp_dir.exists():
         shutil.rmtree(temp_dir)

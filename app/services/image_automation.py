@@ -155,13 +155,15 @@ class GeminiImageScraper:
             line_idx = 0 
             while line_idx < len(lines):
                 line = lines[line_idx]
-                match = re.search(r"\[([\d\.]+)\]\s*(.*)", line)
+                # Update regex to capture the gapless [start-end] format
+                match = re.search(r"\[([\d_]+)-([\d_]+)\]\s*(.*)", line)
                 if not match:
                     line_idx += 1
                     continue
                 
-                timestamp, prompt = match.groups()
-                file_name = f"[{self._get_clean_name(timestamp)}]_image.png"
+                # Extract the pre-formatted timestamps
+                safe_start, safe_end, prompt = match.groups()
+                file_name = f"[{safe_start}-{safe_end}]_image.png"
                 output_path = output_dir / file_name
 
                 if output_path.exists():

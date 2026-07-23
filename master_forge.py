@@ -418,7 +418,8 @@ def main():
         prompt_engine.generate_all_prompts(
             transcription_json_path=batched_json_path, 
             request_yaml=raw_yaml_request, 
-            script_text=final_script
+            script_text=final_script,
+            audio_path=audio_path
         )
         
         if manual_mode:

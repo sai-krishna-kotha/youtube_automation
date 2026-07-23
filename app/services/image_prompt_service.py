@@ -1,5 +1,6 @@
 import json
 import time
+import wave
 from pathlib import Path
 from app.models.script_schema import BatchPromptResponse, SingleShotPrompt
 
@@ -47,7 +48,7 @@ class ImagePromptService:
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
 
-    def generate_all_prompts(self, transcription_json_path: Path, request_yaml: str, script_text: str):
+    def generate_all_prompts(self, transcription_json_path: Path, request_yaml: str, script_text: str, audio_path: Path = None):
         print("\n--- GENERATING HIERARCHICAL IMAGE PROMPTS ---")
         
         with open(transcription_json_path, 'r', encoding='utf-8') as f:
@@ -143,10 +144,23 @@ class ImagePromptService:
             # Sort the shots chronologically
             all_shots_so_far.sort(key=lambda x: x.start_time)
             
-            # Extract the absolute final end time from the original transcription data
-            final_end_time = batches[-1]['end_time'] if batches else 0.0
+            # 1. HARDCODE FIRST CLIP TO 0.00
+            if all_shots_so_far:
+                all_shots_so_far[0].start_time = 0.0
+                
+            # 2. HARDCODE LAST CLIP TO EXACT AUDIO DURATION
+            final_end_time = 0.0
+            if audio_path and audio_path.exists():
+                with wave.open(str(audio_path), 'r') as w:
+                    frames = w.getnframes()
+                    rate = w.getframerate()
+                    final_end_time = frames / float(rate)
+            else:
+                # Fallback just in case audio file is missing
+                final_end_time = batches[-1]['end_time'] if batches else 0.0
             
             txt_output_path = self.output_dir / "time_stamped_prompts.txt"
+            
             with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
                 for i, shot in enumerate(all_shots_so_far):
                     current_start = shot.start_time
@@ -157,11 +171,10 @@ class ImagePromptService:
                     else:
                         visual_end = final_end_time
                         
-                    # Format for safe filenames (replace dots with underscores)
-                    safe_start = str(current_start).replace('.', '_')
-                    safe_end = str(visual_end).replace('.', '_')
+                    # Format for safe filenames and round to 3 decimals to avoid long floats
+                    safe_start = str(round(current_start, 3)).replace('.', '_')
+                    safe_end = str(round(visual_end, 3)).replace('.', '_')
                     
-                    # Write the new format
                     txt_file.write(f"[{safe_start}-{safe_end}] {shot.image_prompt}\n")
                     
             print(f" -> Incremental save: time_stamped_prompts.txt updated.")
