@@ -64,6 +64,7 @@ class ImagePromptService:
             length_of_image_prompt = req_data.get('output', {}).get('image_prompt_length', {}).get('target_characters', 700)
         except :
             length_of_image_prompt = 700
+            
         checkpoint_path = self.output_dir / "prompts_checkpoint.json"
         completed_batches = {}
         
@@ -89,7 +90,9 @@ class ImagePromptService:
             
             batch_segments_context = json.dumps(batch["segments"], indent=2)
             
-            # Replaced raw_title with the entire request_yaml!
+            # THE CRITICAL METRIC: How many timestamps do we absolutely need?
+            expected_shot_count = len(batch["segments"])
+            
             user_prompt = (
                 f"{channel_context}"
                 f"--- SPECIFIC VIDEO REQUEST (READ CAREFULLY) ---\n"
@@ -103,38 +106,51 @@ class ImagePromptService:
                 f"{length_of_image_prompt}"
             )
 
-            print(f"Sending Batch {batch['batch_id']} to Gemini API...")
-            raw_response = self.llm.generate_json(user_prompt, response_model=BatchPromptResponse)
+            # --- BULLETPROOF RETRY LOOP ---
+            while True:
+                print(f"Sending Batch {batch['batch_id']} to Gemini API (Expecting exactly {expected_shot_count} shots)...")
+                raw_response = self.llm.generate_json(user_prompt, response_model=BatchPromptResponse)
+                
+                try:
+                    validated_batch = BatchPromptResponse(**json.loads(raw_response))
+                    actual_shot_count = len(validated_batch.shots)
+                    
+                    # STRICT VALIDATION: Did the LLM give us a prompt for every single segment?
+                    if actual_shot_count == expected_shot_count:
+                        print(f"  [✓] Success! Exact match: {actual_shot_count}/{expected_shot_count} shots generated.")
+                        break # Break out of the while loop, we got perfect data!
+                    else:
+                        print(f"  [!] Mismatch: LLM returned {actual_shot_count} shots, but we demand {expected_shot_count}.")
+                        print(f"  [!] Recalling the batch in {SLEEP_TIME} seconds...")
+                        time.sleep(SLEEP_TIME)
+                        
+                except Exception as e:
+                    print(f"  [ERROR] Failed parsing responses for Batch {batch['batch_id']}: {e}")
+                    print(f"  [!] LLM hallucinated JSON structure. Recalling the batch in {SLEEP_TIME} seconds...")
+                    time.sleep(SLEEP_TIME) 
+            # ------------------------------
+
+            # Save the perfectly validated batch to the checkpoint
+            completed_batches[batch_id_str] = [shot.model_dump() for shot in validated_batch.shots]
+            with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                json.dump(completed_batches, f, indent=4)
+                
+            all_shots_so_far = []
+            for b_id, shots in completed_batches.items():
+                for s in shots:
+                    all_shots_so_far.append(SingleShotPrompt(**s))
+                    
+            all_shots_so_far.sort(key=lambda x: x.start_time)
             
-            try:
-                validated_batch = BatchPromptResponse(**json.loads(raw_response))
-                print(f"Successfully processed {len(validated_batch.shots)} shots for Batch {batch['batch_id']}.")
-                
-                completed_batches[batch_id_str] = [shot.model_dump() for shot in validated_batch.shots]
-                with open(checkpoint_path, 'w', encoding='utf-8') as f:
-                    json.dump(completed_batches, f, indent=4)
+            txt_output_path = self.output_dir / "time_stamped_prompts.txt"
+            with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
+                for shot in all_shots_so_far:
+                    txt_file.write(f"[{shot.start_time}] {shot.image_prompt}\n")
                     
-                all_shots_so_far = []
-                for b_id, shots in completed_batches.items():
-                    for s in shots:
-                        all_shots_so_far.append(SingleShotPrompt(**s))
-                        
-                all_shots_so_far.sort(key=lambda x: x.start_time)
-                
-                txt_output_path = self.output_dir / "time_stamped_prompts.txt"
-                with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
-                    for shot in all_shots_so_far:
-                        txt_file.write(f"[{shot.start_time}] {shot.image_prompt}\n")
-                        
-                print(f" -> Incremental save: time_stamped_prompts.txt updated.")
-                    
-            except Exception as e:
-                print(f"[ERROR] Failed parsing responses for Batch {batch['batch_id']}: {e}")
-                print("[!] Halting pipeline. Fix the issue and re-run to resume.")
-                raise e 
+            print(f" -> Incremental save: time_stamped_prompts.txt updated.")
 
             if idx < total_batches - 1:
-                print(f"Waiting {SLEEP_TIME} seconds to protect API rate limits...")
+                print(f"Waiting {SLEEP_TIME} seconds to protect API rate limits before next batch...")
                 time.sleep(SLEEP_TIME)
 
         print(f"\n[Success] Finalized production-ready layout saved to: {self.output_dir / 'time_stamped_prompts.txt'}")
