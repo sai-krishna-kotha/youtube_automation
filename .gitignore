@@ -10,5 +10,7 @@ voices_test/
 gemini_session/
 gemini_session_jio/
 gemini_session_sm/
+gemini_session_pp/
 generated_assets/
 promptss/
+app/api_state_checkpoint.json
