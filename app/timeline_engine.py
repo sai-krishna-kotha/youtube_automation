@@ -167,7 +167,7 @@ def build_video(project_dir: Path):
     temp_dir.mkdir(exist_ok=True)
     base_dir = project_dir.parent.parent.parent.parent
     
-    sfx_enabled_channels = ["tech", "huh", "doodle"]
+    sfx_enabled_channels = ["tech", "huh", "doodle", "stick"]
     audio_tracks = [] # Queue to hold multiple audio versions if needed
     
     # --- AUDIO ROUTING LOGIC ---
@@ -185,7 +185,7 @@ def build_video(project_dir: Path):
     blueprint_lines = []
     
     # --- CHANNEL LOGIC & POOL PRINTING ---
-    is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech", "doodle"])
+    is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech", "doodle", "stick"])
     
     print(f"\n[Engine] Channel Detected: {channel_name.upper()}")
     print(f"[Engine] Audio Duration: {total_audio_time:.2f} seconds")
