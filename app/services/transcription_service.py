@@ -127,10 +127,13 @@ class TranscriptionService:
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
         aligned_result = whisperx.align(result["segments"], model_a, metadata, audio, self.device, return_char_alignments=False)
         
-        # Calculate intelligent back-off limits based on the requested frequency
-        punc_limit = max(1.5, target_freq * 0.75)
-        conj_limit = max(3.0, target_freq * 0.90)
+        ideal_punc = target_freq * 0.60
+        ideal_conj = target_freq * 0.80
         
+        punc_limit = max(0.8, ideal_punc)
+        conj_limit = max(1.2, ideal_conj)
+        
+        print(f"Dynamic Limits set -> Punc: {punc_limit:.2f}s | Conj: {conj_limit:.2f}s | Max: {target_freq:.2f}s")
         print("Enforcing dynamic visual pacing at grammatical breaks...")
         paced_segments = self._enforce_segment_pacing(
             aligned_result["segments"], 
@@ -147,56 +150,71 @@ class TranscriptionService:
             return None
             
         batch_start_time = paced_segments[0]['start']
+        seg_end = batch_start_time
         
         for i, seg in enumerate(paced_segments):
+            seg_start = round(seg['start'], 2)
+            seg_end = round(seg['end'], 2)
+
+            # AudioSegment without end timestamp
             clean_seg = AudioSegment(
                 segment_id=i + 1,
-                start=round(seg['start'], 2),
-                end=round(seg['end'], 2),
+                start=seg_start,
+                end=seg_end,
                 text=seg['text'].strip()
             )
             current_batch.append(clean_seg)
             
-            current_duration = clean_seg.end - batch_start_time
+            # Duration calculated using local seg_end variable
+            current_duration = seg_end - batch_start_time
             
             if current_duration >= min_duration:
                 gap = 0.0
                 is_last_segment = (i + 1 == len(paced_segments))
                 
                 if not is_last_segment:
-                    gap = paced_segments[i+1]['start'] - clean_seg.end
+                    gap = paced_segments[i+1]['start'] - seg_end
                 
                 if gap >= 0.5 or current_duration >= max_duration or is_last_segment:
                     new_batch = AudioBatch(
                         batch_id=len(batches) + 1,
+                        length=len(current_batch),
                         start_time=batch_start_time,
-                        end_time=clean_seg.end,
+                        end_time=seg_end,
                         duration=round(current_duration, 2),
                         segments=current_batch
                     )
                     batches.append(new_batch)
-                    print(f"  -> Created Batch {new_batch.batch_id}: {new_batch.duration}s (Segments {current_batch[0].segment_id} to {current_batch[-1].segment_id})")
+                    print(f"   -> Created Batch {new_batch.batch_id}: {new_batch.duration}s (Segments {current_batch[0].segment_id} to {current_batch[-1].segment_id})")
                     
                     current_batch = []
                     if not is_last_segment:
                         batch_start_time = paced_segments[i+1]['start']
 
         if current_batch:
-            remaining_duration = current_batch[-1].end - batch_start_time
+            remaining_duration = seg_end - batch_start_time
             new_batch = AudioBatch(
                 batch_id=len(batches) + 1,
+                length=len(current_batch),
                 start_time=batch_start_time,
-                end_time=current_batch[-1].end,
+                end_time=seg_end,
                 duration=round(remaining_duration, 2),
                 segments=current_batch
             )
             batches.append(new_batch)
-            print(f"  -> Flushed Final Batch {new_batch.batch_id}: {new_batch.duration}s (Segments {current_batch[0].segment_id} to {current_batch[-1].segment_id})")
+            print(f"   -> Flushed Final Batch {new_batch.batch_id}: {new_batch.duration}s (Segments {current_batch[0].segment_id} to {current_batch[-1].segment_id})")
 
         final_transcription = TimestampedTranscription(batches=batches)
         
+        # Convert to dict and explicitly strip 'end' / 'end_time' keys if defined in models
+        dump_data = final_transcription.model_dump(exclude_none=True)
+        for batch in dump_data.get("batches", []):
+            # batch.pop("end_time", None)
+            for segment in batch.get("segments", []):
+                segment.pop("end", None)
+
         with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(final_transcription.model_dump_json(indent=4))
+            json.dump(dump_data, f, indent=4)
             
         print(f"Success! Smart Batched JSON saved to {output_path}")
         return output_path
