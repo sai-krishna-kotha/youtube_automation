@@ -77,44 +77,31 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
     sfx_dir = base_dir / "assets" / "sfx"
     mixed_audio_path = temp_dir / "mixed_audio.wav"
     
-    # If no SFX folder or files exist, just return the original audio
     if not sfx_dir.exists():
         return master_audio_path
         
-    # --- UPGRADE: Grab both .wav and .mp3 files ---
     sfx_files = list(sfx_dir.glob("*.wav")) + list(sfx_dir.glob("*.mp3"))
     if not sfx_files:
         return master_audio_path
 
     print("\n[Audio Engine] Mixing cinematic sound effects into master track...")
     
-    # UPGRADE: Use from_file() so it handles the master track formats dynamically
     main_audio = AudioSegment.from_file(str(master_audio_path))
     
-    # Start from index 1 (we don't need a transition on the very first clip)
     for i in range(1, len(parsed_data)):
         prev_duration = parsed_data[i-1]["duration"]
         start_time_sec = parsed_data[i]["time"]
         
-        # LOGIC: Only add SFX if the previous clip was long (> 4 seconds) OR a 40% random chance
         if prev_duration > 2.0:
             sfx_choice = random.choice(sfx_files)
-            
-            # --- UPGRADE: Use from_file() to seamlessly load either .mp3 or .wav ---
             sfx = AudioSegment.from_file(str(sfx_choice))
-            
-            # Lower the volume of the SFX by 4dB so it doesn't drown out your voiceover
             sfx = sfx - 4 
             
-            # Convert timestamp to milliseconds. 
-            # Subtract 200ms so the whoosh peaks exactly as the visual cut happens
             insert_ms = int(start_time_sec * 1000) - 200 
             insert_ms = max(0, insert_ms)
             print(f"\t\tsfx: {sfx_choice.name} added at {start_time_sec: 05.2f} for {prev_duration: 05.2f} duration")
-            # Overlay the sound onto the main track
             main_audio = main_audio.overlay(sfx, position=insert_ms)
 
-    # Export the newly mixed track as a fresh .wav file for FFmpeg
     main_audio.export(str(mixed_audio_path), format="wav")
     print("[Audio Engine] Master track mixdown complete!")
     
@@ -140,8 +127,8 @@ def build_video(project_dir: Path):
     # --- 1. PARSE TIMESTAMPS & EXACT DURATIONS ---
     images = [f for f in upscale_dir.iterdir() if f.suffix.lower() in ['.png', '.jpg', '.jpeg']]
     
-    # Match the gapless format: [start-end]
-    pattern = re.compile(r'\[([\d_]+)-([\d_]+)\]')
+    # UPGRADE: More robust regex. Brackets are optional, but strictly captures hyphenated timestamps
+    pattern = re.compile(r'\[?([\d_]+)-([\d_]+)\]?')
     
     parsed_data = []
     for img in images:
@@ -150,7 +137,6 @@ def build_video(project_dir: Path):
             start_sec = float(match.group(1).replace('_', '.'))
             end_sec = float(match.group(2).replace('_', '.'))
             
-            # Duration is flawlessly extracted directly from the filename
             duration = max(0.5, round(end_sec - start_sec, 3))
             
             parsed_data.append({
@@ -159,10 +145,17 @@ def build_video(project_dir: Path):
                 "duration": duration
             })
 
-    # Sort chronologically
+    # --- CRITICAL SAFETY CHECK ---
+    if not parsed_data:
+        print(f"\n[FATAL ERROR] The Timeline Engine couldn't find any images with the gapless [start-end] format in:")
+        print(f"  -> {upscale_dir}")
+        print("\n[!] Diagnosis: You are likely testing an OLD project folder (e.g., '3_why_you_cant') that still has images named with the old single-timestamp format (like '[0_43]_image.png').")
+        print("[!] Fix: Please generate a brand new project end-to-end to test the new gapless architecture, or rename a few images to '[0_00-4_52]_image.png' to test this folder.")
+        sys.exit(1)
+    # -----------------------------
+
     parsed_data.sort(key=lambda x: x["time"])
     
-    # Define total_audio_time for logging and final duration fallback if needed
     total_audio_time = get_audio_duration(audio_path)
 
     if temp_dir.exists():
@@ -171,23 +164,19 @@ def build_video(project_dir: Path):
     base_dir = project_dir.parent.parent.parent.parent
     
     sfx_enabled_channels = ["tech", "huh", "doodle", "stick"]
-    audio_tracks = [] # Queue to hold multiple audio versions if needed
+    audio_tracks = [] 
     
-    # --- AUDIO ROUTING LOGIC ---
     if any(keyword in channel_name for keyword in sfx_enabled_channels):
         print(f"\n[Audio Engine] Fast-paced channel detected ({channel_name}). Enabling SFX...")
         mixed_audio_path = mix_sfx_track(parsed_data, audio_path, temp_dir, base_dir)
-        # Render BOTH versions for A/B testing
         audio_tracks.append((mixed_audio_path, "_WITH_SFX"))
         audio_tracks.append((audio_path, "_CLEAN"))
     else:
         print(f"\n[Audio Engine] Storytelling channel detected ({channel_name}). Bypassing SFX for clean audio.")
-        # Render ONLY clean version
         audio_tracks.append((audio_path, "_CLEAN"))
         
     blueprint_lines = []
     
-    # --- CHANNEL LOGIC & POOL PRINTING ---
     is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech", "doodle", "stick"])
     
     print(f"\n[Engine] Channel Detected: {channel_name.upper()}")
@@ -205,9 +194,8 @@ def build_video(project_dir: Path):
         print(" -> Effects disabled. Pure 4K static upscaling.")
         print("=========================\n")
 
-    # --- 3. GENERATE MICRO-CLIPS ---
     last_motion = ""
-    incoming_transition = "hard_cut" # The first clip always starts normally
+    incoming_transition = "hard_cut" 
     
     for i, data in enumerate(parsed_data):
         img_path = data["path"]
@@ -229,30 +217,25 @@ def build_video(project_dir: Path):
             else:
                 out_transition = get_random_transition()
 
-            # CRASH-PROOF CONSTANT SPEED MATH (NO SPACES ALLOWED IN MATH STRINGS)
-            # 'on' is the Output Frame Number.
             if motion_style == "zoom_in":
                 motion_filter = f"zoompan=z='min(1.5,1.02+0.0003*on)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
             elif motion_style == "zoom_out":
                 motion_filter = f"zoompan=z='max(1.001,1.15-0.0003*on)':d={total_frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
             elif motion_style == "pan_lr":
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='min(iw-iw/zoom,0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
-            else: # pan_rl
+            else: 
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='max(0,(iw-iw/zoom)-0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
 
-            # Base visual chain - Scaled to 6000x3375 to prevent RAM crashes while maintaining 4K quality
             vf_chain = f"scale=6000:3375,{motion_filter},noise=alls=2:allf=t"
 
             fade_duration = 0.3
             fade_start = max(0.0, duration - fade_duration)
 
-            # Apply IN transition
             if incoming_transition == "flash_white":
                 vf_chain += f",fade=t=in:st=0:d={fade_duration}:color=white"
             elif incoming_transition == "fade_black":
                 vf_chain += f",fade=t=in:st=0:d={fade_duration}:color=black"
 
-            # Apply OUT transition
             if out_transition == "flash_white":
                 vf_chain += f",fade=t=out:st={fade_start}:d={fade_duration}:color=white"
             elif out_transition == "fade_black":
@@ -261,13 +244,11 @@ def build_video(project_dir: Path):
         sys.stdout.write(f"\r  -> [{motion_style.upper()}] | Ends w/ {out_transition} | Rendering clip {i+1}/{len(parsed_data)} ({duration}s)...")
         sys.stdout.flush()
 
-        # UPDATED: Using h264_nvenc instead of libx264 for hardware acceleration!
         cmd = (
             f'"{FFMPEG_EXE}" -loop 1 -i "{img_path}" '
             f'-vf "{vf_chain}" -c:v h264_nvenc -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
         )
         
-        # ERROR TRAP
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
         if result.returncode != 0:
             print(f"\n\n[FATAL ERROR] FFmpeg failed on {clip_name}:")
@@ -285,7 +266,6 @@ def build_video(project_dir: Path):
 
     print("\n[Engine] Executing lightning timeline merge and mapping master studio audio...")
     
-    # --- MULTI-TRACK RENDER LOOP ---
     for audio_track_path, suffix in audio_tracks:
         final_output = project_dir / f"{base_video_name}{suffix}.mp4"
         print(f"  -> Rendering {suffix.replace('_', ' ').strip()} version...")
@@ -303,7 +283,6 @@ def build_video(project_dir: Path):
             
         print(f"  [SUCCESS] Saved: {final_output.name}")
 
-    # Cleanup temp files after all versions are rendered
     shutil.rmtree(temp_dir)
     print(f"\n[SUCCESS] Factory Pipeline Complete!")
 
