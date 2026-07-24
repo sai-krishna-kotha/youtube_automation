@@ -206,7 +206,6 @@ def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
         video_length = video_data.get('target_duration_minutes', 3)
         upscaler_model = video_data.get('upscaler_model', 'realesrgan-x4plus-anime')
         
-        # Look for voice_model, fallback to kokoro_model for backwards compatibility
         voice = voice_data.get('voice_model', voice_data.get('kokoro_model', 'af_bella'))
         speed = voice_data.get('speed', 1.0)
         enable_wm_remover = video_data.get('enable_watermark_remover', True)
@@ -478,7 +477,7 @@ def main():
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
     # ==============================================================
-    # PHASE 1.5: PLAYWRIGHT IMAGE SCRAPER
+    # PHASE 1.5: PLAYWRIGHT IMAGE SCRAPER WITH SMART SELF-HEALING RETRIES
     # ==============================================================
     if run_phase1_5:
         print("\n[Engine] Initializing Playwright Image Automation...")
@@ -499,34 +498,61 @@ def main():
 
         prompts_file = current_run_dir / "time_stamped_prompts.txt"
         raw_output_dir = current_run_dir / "1_raw_images"
+        raw_output_dir.mkdir(parents=True, exist_ok=True)
         
         if not prompts_file.exists():
             print(f"\n[!] ERROR: Cannot find {prompts_file.name}. Ensure Phase 1 ran successfully.")
             pack_system_data(current_run_dir)
             sys.exit(1)
             
-        # --- NEW: AUTO-REPAIR LOOP FOR MISSING IMAGES ---
-        max_repair_passes = 4
+        # --- ROBUST SMART SELF-HEALING REPAIR LOOP ---
+        max_repair_passes = 3
+        
         for pass_num in range(1, max_repair_passes + 1):
+            print(f"\n[Engine] Image Generation Pass {pass_num}/{max_repair_passes}...")
+            
+            # 1. Run standard generation script
             scraper.generate_images(input_file=prompts_file, output_dir=raw_output_dir)
             
-            # Verify Counts
+            # 2. Parse expected prompts from file using the correct gapless regex format [start-end]
+            expected_prompts = []
             with open(prompts_file, 'r', encoding='utf-8') as f:
-                expected_count = len([line for line in f if line.strip() and re.search(r"\[([\d\.]+)\]", line)])
+                for line in f:
+                    if line.strip():
+                        match = re.search(r"\[([\d_]+)-([\d_]+)\]", line)
+                        if match:
+                            start_s, end_s = match.groups()
+                            filename = f"[{start_s}-{end_s}]_image.png"
+                            expected_prompts.append((filename, line.strip()))
+                            
+            expected_count = len(expected_prompts)
             
-            actual_count = len(list(raw_output_dir.glob("*.png")))
+            # 3. Identify truly missing files on disk
+            missing_prompts_file = current_run_dir / "missing_prompts_retry.txt"
+            missing_items = [item for item in expected_prompts if not (raw_output_dir / item[0]).exists()]
             
-            if actual_count >= expected_count:
-                print(f"\n[System] Verification Passed: {actual_count}/{expected_count} images generated successfully!")
+            actual_count = expected_count - len(missing_items)
+            
+            if len(missing_items) == 0:
+                print(f"\n[System] Verification Passed! All {actual_count}/{expected_count} images successfully generated.")
+                if missing_prompts_file.exists():
+                    missing_prompts_file.unlink() # Cleanup temp retry file if it exists
                 break
             else:
-                print(f"\n[!] Verification Failed (Pass {pass_num}/{max_repair_passes}): Found {actual_count} images, expected {expected_count}.")
+                print(f"\n[!] Verification Warning: Missing {len(missing_items)} out of {expected_count} images.")
                 if pass_num < max_repair_passes:
-                    print("[!] Re-running scraper to patch missing images...")
-                    time.sleep(3)
+                    print(f"[!] Generating temporary patch file for the {len(missing_items)} missing clips...")
+                    with open(missing_prompts_file, 'w', encoding='utf-8') as mf:
+                        for _, full_line in missing_items:
+                            mf.write(full_line + "\n")
+                            
+                    print(f"[!] Re-running scraper specifically for missing assets (Attempt {pass_num + 1})...")
+                    scraper.generate_images(input_file=missing_prompts_file, output_dir=raw_output_dir)
+                    if missing_prompts_file.exists():
+                        missing_prompts_file.unlink()
                 else:
-                    print("[!] Max repair passes reached. Proceeding with missing images (likely blocked by Gemini policy).")
-        # ------------------------------------------------
+                    print("[!] Max repair passes reached. Proceeding with currently available images.")
+        # ---------------------------------------------
         
         if not run_phase2:
             pack_system_data(current_run_dir)
@@ -580,7 +606,6 @@ def main():
                 
             generate_video = input("\nDo you want to generate video now? (1: Yes, 0: No): ").strip()
         else:
-            # If Fully Automated, force the full pipeline
             print("\n[System] Fully Automated Mode: Executing Full Render Pipeline...")
             p2_choice = '1'
             generate_video = '1'
@@ -594,7 +619,6 @@ def main():
                 elif override == '1':
                     enable_watermark_remover = True
 
-            # Execute or bypass based on the final toggle state
             if enable_watermark_remover:
                 m2.run_watermark_removal(raw_dir, wm_dir)
             else:
