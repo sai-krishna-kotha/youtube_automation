@@ -242,13 +242,13 @@ class GeminiImageScraper:
                         }}"""
 
                         try:
-                            dom_status = page.wait_for_function(js_wait_condition, timeout=120000).json_value()
+                            dom_status = page.wait_for_function(js_wait_condition, timeout=200000).json_value()
                         except Exception:
                             dom_status = "TIMEOUT"
 
                         if dom_status == "IMAGE_READY":
                             # 🛑 DEFINITE HARD WAIT: Gives the browser GPU plenty of time to paint the pixels
-                            print("  [Wait] Image detected. Giving it 6 seconds to fully render to prevent corruption...")
+                            print("  [Wait] Image detected. Giving it 10 seconds to fully render to prevent corruption...")
                             time.sleep(10.0)
                             
                             # 4. EXTRACT CANVAS DATA
