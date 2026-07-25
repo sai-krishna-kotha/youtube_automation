@@ -403,8 +403,8 @@ def main():
             batched_json_path = transcriber.extract_and_batch(
                 audio_path=audio_path, 
                 request_yaml=raw_yaml_request,
-                min_duration=40.0, 
-                max_duration=60.0
+                min_duration=30.0, 
+                max_duration=40.0
             )
             
         if manual_mode:
