@@ -29,7 +29,6 @@ import app.timeline_engine as m3
 
 # --- WORKSPACE CLEANUP MANAGERS ---
 def unpack_system_data(run_dir: Path):
-    """Temporarily pulls internal JSONs/Logs into the root so services can use them."""
     sys_dir = run_dir / "_system_data"
     if sys_dir.exists():
         for f in sys_dir.iterdir():
@@ -37,16 +36,11 @@ def unpack_system_data(run_dir: Path):
                 shutil.move(str(f), str(run_dir / f.name))
 
 def pack_system_data(run_dir: Path):
-    """Hides all JSONs, logs, and intermediary files into a hidden folder for the user."""
     sys_dir = run_dir / "_system_data"
     sys_dir.mkdir(exist_ok=True)
-    
-    # Scoop up all system files
     for ext in ["*.json", "*.log"]:
         for f in run_dir.glob(ext):
             shutil.move(str(f), str(sys_dir / f.name))
-            
-    # Also hide the redundant thumbnail text prompt
     old_thumb = run_dir / "thumbnail-image-prompts.txt"
     if old_thumb.exists():
         shutil.move(str(old_thumb), str(sys_dir / old_thumb.name))
@@ -118,7 +112,6 @@ def setup_channel(base_dir: Path) -> tuple[Path, Path, Path, str]:
         sys.exit(0)
         
     return master_prompts_dir, channel_dir, channel_output_base, channel_slug
-
 
 def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
     channel_output_base.mkdir(parents=True, exist_ok=True)
@@ -251,7 +244,6 @@ def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
         print(f"\n[System] Created new workspace from {selected_request_path.name}")
         return run_dir
 
-
 def main():
     load_dotenv()
     base_dir = Path(__file__).resolve().parent
@@ -259,12 +251,10 @@ def main():
     master_prompts_dir, channel_dir, channel_output_base, channel_slug = setup_channel(base_dir)
     current_run_dir = get_project_workspace(channel_dir, channel_output_base)
     
-    # --- PREPARE WORKSPACE FOR SERVICES ---
     unpack_system_data(current_run_dir)
     print(f"\n[System] Active Workspace: {current_run_dir}")
     
     config_path = current_run_dir / "run_config.json"
-    
     with open(config_path, "r") as f:
         config = json.load(f)
         
@@ -317,9 +307,10 @@ def main():
     print("  4. Run Phase 1.5 Only (Auto-Generate Images)")
     print("  5. Run Phase 2 Only (Final Render)")
     print("  6. Setup Gemini Authentication (Run Once)")
+    print("  7. Setup Google Flow Authentication (Run Once)")
     print("  0. To Exit")
     
-    phase_choice = input("\nSelect Option (0-6): ").strip()
+    phase_choice = input("\nSelect Option (0-7): ").strip()
     
     if phase_choice == '0':
         pack_system_data(current_run_dir)
@@ -330,6 +321,12 @@ def main():
         scraper = GeminiImageScraper(base_dir=base_dir)
         scraper.setup_session()
         sys.exit(0)
+
+    if phase_choice == '7':
+        from app.services.flow_automation import GoogleFlowScraper
+        scraper = GoogleFlowScraper(base_dir=base_dir)
+        scraper.setup_session()
+        sys.exit(0)
         
     # --- PIPELINE ROUTING FLAGS ---
     run_phase1 = phase_choice in ['1', '2', '3']
@@ -337,12 +334,23 @@ def main():
     run_phase2 = phase_choice in ['1', '2', '5']
     manual_mode = phase_choice == '2'
 
+    # --- SELECT AUTOMATION TOOL (Triggers in Manual, Phase 1.5, and Zero-Touch) ---
+    ai_tool_choice = "gemini" 
+    if run_phase1_5:
+        print("\n" + "-"*40)
+        print("   SELECT IMAGE AUTOMATION TOOL")
+        print("-" * 40)
+        print("  1. Gemini (Default)")
+        print("  2. Google Flow")
+        tool_sel = input("\nSelect Tool (1/2): ").strip()
+        ai_tool_choice = "flow" if tool_sel == '2' else "gemini"
+    # -----------------------------------------------------------------------------
+
     # ==============================================================
     # PHASE 1: ASSET CREATION
     # ==============================================================
     if run_phase1:
         print("\n[Engine] Initializing Phase 1 Pipeline...")
-        
         from app.services.llm_client import GeminiClient
         from app.services.brain_service import ScriptGenerationService
         from app.services.image_prompt_service import ImagePromptService
@@ -354,7 +362,6 @@ def main():
         prompt_engine = ImagePromptService(llm, master_prompts_dir=master_prompts_dir, channel_dir=channel_dir, output_dir=current_run_dir)
         packager = PackagingService(llm, master_prompts_dir=master_prompts_dir, channel_dir=channel_dir, output_dir=current_run_dir)
         
-        # --- MODULE 1: SCRIPT ---
         script_path = current_run_dir / "final_script.txt"
         if script_path.exists():
             print("[Checkpoint] final_script.txt found. Skipping Brain...")
@@ -368,7 +375,6 @@ def main():
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
-        # --- MODULE 2: AUDIO ---
         existing_audio = list(current_run_dir.glob("*.wav"))
         if existing_audio:
             print(f"[Checkpoint] Existing audio found ({existing_audio[0].name}). Skipping TTS Initialization...")
@@ -384,7 +390,6 @@ def main():
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
         
-        # --- MODULE 3: TRANSCRIPTION ---
         existing_json = [f for f in current_run_dir.glob("*.json") if f.name not in [
             "run_config.json", 
             "metadata.json", 
@@ -412,7 +417,6 @@ def main():
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
         
-        # --- MODULE 4: IMAGE PROMPTS ---
         print("\n[Pipeline] Validating/Generating Image Prompts...")
         prompt_engine.generate_all_prompts(
             transcription_json_path=batched_json_path, 
@@ -426,7 +430,6 @@ def main():
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
                 
-        # --- MODULE 5: PACKAGING ---
         thumbnail_prompts_path = current_run_dir / "thumbnail-image-prompts.json"
         is_calling_generate_thumbnail_prompts = not thumbnail_prompts_path.exists()
         
@@ -480,14 +483,18 @@ def main():
     # PHASE 1.5: PLAYWRIGHT IMAGE SCRAPER WITH SMART SELF-HEALING RETRIES
     # ==============================================================
     if run_phase1_5:
-        print("\n[Engine] Initializing Playwright Image Automation...")
-        from app.services.image_automation import GeminiImageScraper
+        print(f"\n[Engine] Initializing {ai_tool_choice.title()} Image Automation...")
         
-        scraper = GeminiImageScraper(base_dir=base_dir)
+        if ai_tool_choice == "flow":
+            from app.services.flow_automation import GoogleFlowScraper
+            scraper = GoogleFlowScraper(base_dir=base_dir)
+        else:
+            from app.services.image_automation import GeminiImageScraper
+            scraper = GeminiImageScraper(base_dir=base_dir)
         
         # --- THE AUTO-AUTH INTERCEPT ---
         if not scraper.session_dir.exists():
-            print("\n[!] Gemini Authentication missing! Pausing pipeline to authenticate...")
+            print(f"\n[!] {ai_tool_choice.title()} Authentication missing! Pausing pipeline to authenticate...")
             scraper.setup_session()
             
             auth_proceed = input("\nAuthentication complete. Do you want to proceed with image generation? (1: Yes, 0: Exit): ").strip()
@@ -505,16 +512,13 @@ def main():
             pack_system_data(current_run_dir)
             sys.exit(1)
             
-        # --- ROBUST SMART SELF-HEALING REPAIR LOOP ---
         max_repair_passes = 3
         
         for pass_num in range(1, max_repair_passes + 1):
             print(f"\n[Engine] Image Generation Pass {pass_num}/{max_repair_passes}...")
             
-            # 1. Run standard generation script
             scraper.generate_images(input_file=prompts_file, output_dir=raw_output_dir)
             
-            # 2. Parse expected prompts from file using the correct gapless regex format [start-end]
             expected_prompts = []
             with open(prompts_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -526,8 +530,6 @@ def main():
                             expected_prompts.append((filename, line.strip()))
                             
             expected_count = len(expected_prompts)
-            
-            # 3. Identify truly missing files on disk
             missing_prompts_file = current_run_dir / "missing_prompts_retry.txt"
             missing_items = [item for item in expected_prompts if not (raw_output_dir / item[0]).exists()]
             
@@ -536,7 +538,7 @@ def main():
             if len(missing_items) == 0:
                 print(f"\n[System] Verification Passed! All {actual_count}/{expected_count} images successfully generated.")
                 if missing_prompts_file.exists():
-                    missing_prompts_file.unlink() # Cleanup temp retry file if it exists
+                    missing_prompts_file.unlink() 
                 break
             else:
                 print(f"\n[!] Verification Warning: Missing {len(missing_items)} out of {expected_count} images.")
@@ -552,7 +554,6 @@ def main():
                         missing_prompts_file.unlink()
                 else:
                     print("[!] Max repair passes reached. Proceeding with currently available images.")
-        # ---------------------------------------------
         
         if not run_phase2:
             pack_system_data(current_run_dir)
@@ -641,7 +642,6 @@ def main():
             else:
                 print("\n[!] Video generation skipped. Your assets are ready !!")
                 
-        # --- BULLETPROOF WORKSPACE CLEANUP ---
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
             print("  [Cleanup] Trashed temporary upscale files.")
