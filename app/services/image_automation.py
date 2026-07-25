@@ -17,9 +17,9 @@ class GeminiImageScraper:
         
         # --- STRICT ACCOUNT PRIORITY LIST ---
         self.account_order = [
-            "gemini_session_sm",
             "gemini_session",
             "gemini_session_pp",
+            "gemini_session_sm",
             "gemini_session_jio",
         ]
         
@@ -155,13 +155,11 @@ class GeminiImageScraper:
             line_idx = 0 
             while line_idx < len(lines):
                 line = lines[line_idx]
-                # Update regex to capture the gapless [start-end] format
                 match = re.search(r"\[([\d_]+)-([\d_]+)\]\s*(.*)", line)
                 if not match:
                     line_idx += 1
                     continue
                 
-                # Extract the pre-formatted timestamps
                 safe_start, safe_end, prompt = match.groups()
                 file_name = f"[{safe_start}-{safe_end}]_image.png"
                 output_path = output_dir / file_name
@@ -179,7 +177,6 @@ class GeminiImageScraper:
 
                 for attempt in range(self.max_retries):
                     try:
-                        # 1. BUBBLE ISOLATION
                         js_get_bubble_count = "() => document.querySelectorAll('message-content, [data-message-author-role=\"model\"]').length"
                         bubble_count_before = page.evaluate(js_get_bubble_count)
                         
@@ -188,31 +185,26 @@ class GeminiImageScraper:
                         except Exception:
                             pass 
 
-                        # 2. HYBRID PROMPT INJECTION (Human-paced typing + instant prompt paste)
                         box = page.locator('div[role="textbox"]')
                         box.wait_for(state="visible", timeout=10000)
                         box.click()
                         box.fill("")
                         time.sleep(1)
                         
-                        # Step A: Type prefix slowly like a real human (50ms to 100ms per character)
                         prefix = "Directly Create an image with this below prompt:"
                         box.press_sequentially(prefix, delay=random.randint(50, 100))
-                        time.sleep(0.5) # Take a breath
+                        time.sleep(0.5) 
                         
-                        # Step B: Perform explicit Shift + Enter
                         page.keyboard.down("Shift")
                         page.keyboard.press("Enter")
                         page.keyboard.up("Shift")
-                        time.sleep(0.5) # Take a breath
+                        time.sleep(0.5) 
                         
-                        # Step C: Instant insert of the 800-character prompt
                         page.keyboard.insert_text(prompt)
-                        time.sleep(1.0) # Pause after pasting a huge wall of text
+                        time.sleep(1.0) 
                         
-                        # Step D: Type final space to ensure UI state activation
                         page.keyboard.press("Space")
-                        time.sleep(1.0) # Hover over the send button...
+                        time.sleep(1.0) 
 
                         send_button = page.locator('button[aria-label*="Send message"], button[aria-label*="Send"], button[title*="Send"]')
                         send_button.wait_for(state="visible", timeout=10000)
@@ -220,65 +212,91 @@ class GeminiImageScraper:
                         
                         print(f"Generating (Attempt {attempt + 1}/{self.max_retries})... Waiting for image DOM node...")
 
-                        # 3. REACTIVE DOM OBSERVER
                         js_wait_condition = f"""() => {{
                             const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
                             if (blocks.length <= {bubble_count_before}) return false;
                             
                             const latestBlock = blocks[blocks.length - 1];
                             
-                            // Check for fully loaded image node
                             const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => 
                                 i.complete && (i.naturalWidth > 150 || i.width > 150)
                             );
                             if (imgs.length > 0) return "IMAGE_READY";
                             
-                            // Check for error text / policy / rate limit
                             const txt = latestBlock.innerText.toLowerCase();
-                            if (txt.includes("limit") || txt.includes("quota") || txt.includes("try again")) return "RATE_LIMIT";
+                            if (txt.includes("limit") || txt.includes("quota")) return "RATE_LIMIT";
                             if (txt.includes("can't") || txt.includes("cannot") || txt.includes("policy") || txt.includes("refuse")) return "POLICY_BLOCK";
                             
                             return false;
                         }}"""
 
                         try:
-                            dom_status = page.wait_for_function(js_wait_condition, timeout=200000).json_value()
+                            dom_status = page.wait_for_function(js_wait_condition, timeout=300000).json_value()
                         except Exception:
                             dom_status = "TIMEOUT"
 
                         if dom_status == "IMAGE_READY":
-                            # 🛑 DEFINITE HARD WAIT: Gives the browser GPU plenty of time to paint the pixels
                             print("  [Wait] Image detected. Giving it 10 seconds to fully render to prevent corruption...")
                             time.sleep(10.0)
                             
-                            # 4. EXTRACT CANVAS DATA
-                            js_extract = """() => {
+                            # 4. HYBRID EXTRACTION (Network + Safe Canvas)
+                            js_extract_src = """() => {
                                 const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
                                 const latestBlock = blocks[blocks.length - 1];
                                 const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => 
                                     i.complete && (i.naturalWidth > 150 || i.width > 150)
                                 );
-                                
-                                if (imgs.length === 0) return null;
-                                const targetImg = imgs[0]; 
-                                
-                                const canvas = document.createElement('canvas');
-                                canvas.width = targetImg.naturalWidth || targetImg.width;
-                                canvas.height = targetImg.naturalHeight || targetImg.height;
-                                const ctx = canvas.getContext('2d');
-                                ctx.drawImage(targetImg, 0, 0);
-                                return canvas.toDataURL('image/png');
+                                return imgs.length > 0 ? imgs[0].src : null;
                             }"""
                             
-                            data = page.evaluate(js_extract)
-                            if data:
-                                header, encoded = data.split(",", 1)
-                                with open(output_path, 'wb') as f:
-                                    f.write(base64.b64decode(encoded))
-                                print(f"  [✓] Success! Image rendered & saved perfectly to: {output_path.name}")
-                                break 
+                            img_src = page.evaluate(js_extract_src)
+                            
+                            if img_src:
+                                success = False
+                                
+                                # Route A: Secure Network Fetch (Bypasses Canvas CORS for standard URLs)
+                                if img_src.startswith('http'):
+                                    try:
+                                        img_response = context.request.get(img_src)
+                                        with open(output_path, 'wb') as f:
+                                            f.write(img_response.body())
+                                        success = True
+                                    except Exception as e:
+                                        pass # Fallback to Route B
+                                
+                                # Route B: Canvas Pixel Extraction (For 'blob:' or 'data:' URLs where the network link is dead/revoked)
+                                if not success:
+                                    js_canvas_extract = """() => {
+                                        const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
+                                        const latestBlock = blocks[blocks.length - 1];
+                                        const imgs = Array.from(latestBlock.querySelectorAll('img')).filter(i => 
+                                            i.complete && (i.naturalWidth > 150 || i.width > 150)
+                                        );
+                                        if (imgs.length === 0) return null;
+                                        
+                                        const targetImg = imgs[0]; 
+                                        const canvas = document.createElement('canvas');
+                                        canvas.width = targetImg.naturalWidth || targetImg.width;
+                                        canvas.height = targetImg.naturalHeight || targetImg.height;
+                                        const ctx = canvas.getContext('2d');
+                                        ctx.drawImage(targetImg, 0, 0);
+                                        return canvas.toDataURL('image/png');
+                                    }"""
+                                    
+                                    data = page.evaluate(js_canvas_extract)
+                                    if data:
+                                        header, encoded = data.split(",", 1)
+                                        with open(output_path, 'wb') as f:
+                                            f.write(base64.b64decode(encoded))
+                                        success = True
+                                        
+                                if success:
+                                    print(f"  [✓] Success! Image downloaded securely & saved to: {output_path.name}")
+                                    break 
+                                else:
+                                    raise Exception("Both Network and Canvas extraction mechanisms failed.")
                             else:
-                                raise Exception("Failed to pull canvas data.")
+                                raise Exception("Failed to locate image source URL.")
 
                         elif dom_status == "RATE_LIMIT":
                             print(f"  [!] RATE LIMIT DETECTED on account: {self.session_dir.name}")
@@ -298,7 +316,6 @@ class GeminiImageScraper:
                         if attempt >= self.max_retries - 1:
                             print(f"  [!] Prompt failed after {self.max_retries} attempts. Moving on.")
 
-                # --- MULTI-ACCOUNT ROTATION LOGIC ---
                 if rate_limit_triggered:
                     if len(self.session_directories) > 1:
                         context, page = self._switch_account(p, context)
@@ -311,7 +328,6 @@ class GeminiImageScraper:
                 
                 line_idx += 1
                 
-                # Human wait between prompts
                 cooldown = random.uniform(3.0, 7.0)
                 print(f"Cooling down for {cooldown:.1f}s before next prompt...")
                 time.sleep(cooldown)
