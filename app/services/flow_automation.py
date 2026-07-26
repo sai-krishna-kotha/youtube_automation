@@ -1,4 +1,4 @@
-import sys,os
+import sys, os
 import time
 import base64
 import re
@@ -82,7 +82,8 @@ class GoogleFlowScraper:
             print(f"[System] Session '{new_name}' saved successfully!")
 
     def reset_workspace(self, page):
-        print("  [System] Server error detected. Forcing a hard UI reset...")
+        # CHANGED BACK: Uses the "New project" method to safely clear a stuck/timed-out generation.
+        print("  [System] Timeout detected. Forcing a hard UI reset via New Project...")
         try:
             page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
@@ -117,14 +118,12 @@ class GoogleFlowScraper:
                 if not temp_dir.exists():
                     continue
                 
-                # --- NEW FIX: Prevent blank tabs by checking OS locks BEFORE Playwright ---
+                # --- OS LOCK CHECK ---
                 is_locked = False
                 lock_file = temp_dir / "lockfile" 
                 
                 if lock_file.exists():
                     try:
-                        # If Chrome is running, the OS locks this file. 
-                        # Attempting to open it will throw a PermissionError.
                         with open(lock_file, 'a'):
                             pass
                     except OSError:
@@ -133,10 +132,9 @@ class GoogleFlowScraper:
                 if is_locked:
                     print(f"  [!] '{session_name}' is currently active in another window. Skipping...")
                     continue
-                # --------------------------------------------------------------------------
+                # ---------------------
                 
                 try:
-                    # Attempt to lock this profile
                     context = p.chromium.launch_persistent_context(
                         user_data_dir=str(temp_dir),
                         headless=self.HEADLESS_MODE,
@@ -151,14 +149,10 @@ class GoogleFlowScraper:
                 except Exception as e:
                     print(f"  [!] Failed to launch '{session_name}': {e}")
             
-            # If all profiles are locked, throw a clean error
             if not context:
                 raise Exception("\n[!] All sessions are currently in use. Please wait for the other process to finish or add a new session.")
-            # ----------------------------------------
             
             page = context.new_page()
-            
-            # Allow plenty of time for Google's background sync to finish
             page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
 
@@ -169,14 +163,13 @@ class GoogleFlowScraper:
                 if sign_in_btn.is_visible(timeout=5000):
                     print("  -> 'Sign in' screen detected. Clicking to authenticate using saved session...")
                     sign_in_btn.click()
-                    # Give Google time to redirect you back to the main Flow workspace
                     page.wait_for_load_state("networkidle", timeout=30000)
                 else:
                     print("  -> Active session verified.")
             except Exception:
                 print("  -> No 'Sign in' button found. Proceeding...")
-            # --------------------------------
 
+            # Initial "New project" click for starting the batch cleanly
             try:
                 new_btn = page.locator('text="New project"').first
                 new_btn.wait_for(state="visible", timeout=7000)
@@ -207,9 +200,9 @@ class GoogleFlowScraper:
                 
                 for attempt in range(self.MAX_RETRIES):
                     try:
-                        # 1. Clear old prompt
+                        # 1. Clear old prompt immediately before starting
                         clear_btn = page.locator('button:has(i:text-is("close"))').first
-                        if clear_btn.is_visible():
+                        if clear_btn.is_visible(timeout=3000):
                             clear_btn.click()
                             time.sleep(0.5)
 
@@ -237,33 +230,31 @@ class GoogleFlowScraper:
 
                         # 4. Generate
                         try:
-                            # Try to click the button, but only wait 5 seconds
                             btn = page.locator(self.GENERATE_BTN_SELECTOR).first
                             btn.click(timeout=5000)
                         except Exception:
-                            # If the button isn't found or is disabled, fallback to the Enter key
                             print("  -> Button click failed. Falling back to Enter key submission...")
                             page.keyboard.press("Enter")
                             
                         print(f"  -> Prompt submitted. Waiting for NEW image...")
 
-                        # 5. Wait for Render
+                        # 5. Wait for Render (Increased minimum width to avoid UI placeholders)
                         js_wait_for_new = """(baseline) => {
                             const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
-                                i.complete && (i.naturalWidth > 256 || i.width > 256) && !i.src.includes('avatar')
+                                i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
                             );
                             const newImgs = imgs.filter(i => !baseline.includes(i.src));
                             return newImgs.length > 0;
                         }"""
                         
                         page.wait_for_function(js_wait_for_new, arg=baseline_srcs, timeout=self.GENERATE_TIMEOUT)
-                        print(f"  -> Image is ready to download! Waiting {self.DOWNLOAD_DELAY}s for rendering to finalize...")
+                        print(f"  -> Image rendered! Waiting {self.DOWNLOAD_DELAY}s for data to finalize...")
                         time.sleep(self.DOWNLOAD_DELAY)
 
                         # 6. Extract
                         js_extract_src = """(baseline) => {
                             const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
-                                i.complete && (i.naturalWidth > 256 || i.width > 256) && !i.src.includes('avatar')
+                                i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
                             );
                             const newImgs = imgs.filter(i => !baseline.includes(i.src));
                             return newImgs.length > 0 ? newImgs[0].src : null;
@@ -286,7 +277,7 @@ class GoogleFlowScraper:
                         if not extracted:
                             js_canvas = """(baseline) => {
                                 const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
-                                    i.complete && (i.naturalWidth > 256 || i.width > 256) && !i.src.includes('avatar')
+                                    i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
                                 );
                                 const newImgs = imgs.filter(i => !baseline.includes(i.src));
                                 if (newImgs.length === 0) return null;
@@ -306,9 +297,13 @@ class GoogleFlowScraper:
                                 extracted = True
 
                         if extracted:
-                            print(f"  [✓] Image downloaded securely to: {output_path.name}")
-                            success = True
-                            break
+                            # 7. STRICT VERIFICATION: Do not continue until the file is physically on the drive
+                            if output_path.exists():
+                                print(f"  [✓] Verified on disk securely: {output_path.name}")
+                                success = True
+                                break
+                            else:
+                                raise Exception("Data extracted but file failed to write to disk.")
                         else:
                             raise Exception("Failed to extract data via Network and Canvas.")
 
@@ -321,7 +316,10 @@ class GoogleFlowScraper:
                     print(f"  [!] Failed after {self.MAX_RETRIES} attempts. Skipping to next.")
 
                 line_idx += 1
-                time.sleep(random.uniform(3.0, 7.0))
+                
+                # Added an explicit tiny wait before starting the next loop iteration
+                # to ensure the UI is fully stable after the download.
+                time.sleep(random.uniform(1.0, 2.0))
 
             context.close()
             print("\n[System] Image Batch processing complete!")
