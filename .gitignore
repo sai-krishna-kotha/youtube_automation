@@ -13,6 +13,7 @@ gemini_session_sm/
 gemini_session_pp/
 generated_assets/
 flow_session_1/
+flow_session_2/
 google_flow_module/
 promptss/
 app/api_state_checkpoint.json
