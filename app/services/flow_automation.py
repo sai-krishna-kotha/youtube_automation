@@ -46,7 +46,7 @@ class GoogleFlowScraper:
         self.DOWNLOAD_DELAY = 2 
         
         # Optimized prompt prefix for maximum AI comprehension (Faces Only)
-        self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features appropriate for the situation. Do not generate blank or empty faces:\n\n"        
+        self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features(eyes, mouth) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
         
         self.PROMPT_BOX_SELECTOR = 'div[data-slate-editor="true"][role="textbox"]'
         self.GENERATE_BTN_SELECTOR = 'button:has(i:text-is("arrow_forward"))'
