@@ -1,4 +1,4 @@
-import sys
+import sys,os
 import time
 import base64
 import re
@@ -35,17 +35,17 @@ class GoogleFlowScraper:
         else:
             self.session_directories = valid_sessions
 
-        self.current_idx = 0
-        self.session_dir = self.session_directories[self.current_idx]
+        # Default fallback (overridden dynamically during generate_images)
+        self.session_dir = self.session_directories[0] if self.session_directories else None
 
         # --- FLOW CONFIGURATION ---
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
-        self.HEADLESS_MODE = True
+        self.HEADLESS_MODE = False
         self.MAX_RETRIES = 3
         self.GENERATE_TIMEOUT = 180000 
         self.DOWNLOAD_DELAY = 2 
         
-        # Optimized prompt prefix for maximum AI comprehension
+        # Optimized prompt prefix for maximum AI comprehension (Faces Only)
         self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features appropriate for the situation. Do not generate blank or empty faces:\n\n"        
         
         self.PROMPT_BOX_SELECTOR = 'div[data-slate-editor="true"][role="textbox"]'
@@ -84,7 +84,7 @@ class GoogleFlowScraper:
     def reset_workspace(self, page):
         print("  [System] Server error detected. Forcing a hard UI reset...")
         try:
-            page.goto(self.FLOW_URL, wait_until="domcontentloaded")
+            page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
             new_btn = page.locator('text="New project"').first
             if new_btn.is_visible(timeout=7000):
@@ -107,17 +107,75 @@ class GoogleFlowScraper:
         print(f"[Scraper] Active Account Pool: {len(self.session_directories)} sessions.")
         
         with sync_playwright() as p:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=str(self.session_dir),
-                headless=self.HEADLESS_MODE,
-                viewport={"width": 1280, "height": 720},
-                args=["--disable-blink-features=AutomationControlled"],
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            # --- THE AUTO-DETECT LOAD BALANCER ---
+            context = None
+            active_session_dir = None
+            
+            print("\n[System] Searching for an available session...")
+            for session_name in self.account_order:
+                temp_dir = self.base_dir / session_name
+                if not temp_dir.exists():
+                    continue
+                
+                # --- NEW FIX: Prevent blank tabs by checking OS locks BEFORE Playwright ---
+                is_locked = False
+                lock_file = temp_dir / "lockfile" 
+                
+                if lock_file.exists():
+                    try:
+                        # If Chrome is running, the OS locks this file. 
+                        # Attempting to open it will throw a PermissionError.
+                        with open(lock_file, 'a'):
+                            pass
+                    except OSError:
+                        is_locked = True
+
+                if is_locked:
+                    print(f"  [!] '{session_name}' is currently active in another window. Skipping...")
+                    continue
+                # --------------------------------------------------------------------------
+                
+                try:
+                    # Attempt to lock this profile
+                    context = p.chromium.launch_persistent_context(
+                        user_data_dir=str(temp_dir),
+                        headless=self.HEADLESS_MODE,
+                        viewport={"width": 1280, "height": 720},
+                        args=["--disable-blink-features=AutomationControlled"],
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    )
+                    active_session_dir = temp_dir
+                    self.session_dir = active_session_dir
+                    print(f"  [✓] Successfully locked '{session_name}' for this project!")
+                    break
+                except Exception as e:
+                    print(f"  [!] Failed to launch '{session_name}': {e}")
+            
+            # If all profiles are locked, throw a clean error
+            if not context:
+                raise Exception("\n[!] All sessions are currently in use. Please wait for the other process to finish or add a new session.")
+            # ----------------------------------------
             
             page = context.new_page()
-            page.goto(self.FLOW_URL, wait_until="domcontentloaded")
+            
+            # Allow plenty of time for Google's background sync to finish
+            page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
+
+            # --- SMART SIGN-IN CHECK ---
+            print("  -> Checking for 'Sign in' landing page...")
+            try:
+                sign_in_btn = page.locator('text="Sign in"').first
+                if sign_in_btn.is_visible(timeout=5000):
+                    print("  -> 'Sign in' screen detected. Clicking to authenticate using saved session...")
+                    sign_in_btn.click()
+                    # Give Google time to redirect you back to the main Flow workspace
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                else:
+                    print("  -> Active session verified.")
+            except Exception:
+                print("  -> No 'Sign in' button found. Proceeding...")
+            # --------------------------------
 
             try:
                 new_btn = page.locator('text="New project"').first
@@ -160,7 +218,7 @@ class GoogleFlowScraper:
 
                         # 3. Inject Prompt Safely
                         box = page.locator(self.PROMPT_BOX_SELECTOR).first
-                        box.wait_for(state="visible", timeout=15000)
+                        box.wait_for(state="visible", timeout=45000)
                         box.fill("")
                         time.sleep(0.5)
                         
@@ -179,7 +237,7 @@ class GoogleFlowScraper:
 
                         # 4. Generate
                         try:
-                            # Try to click the button, but only wait 5 seconds instead of 30
+                            # Try to click the button, but only wait 5 seconds
                             btn = page.locator(self.GENERATE_BTN_SELECTOR).first
                             btn.click(timeout=5000)
                         except Exception:
