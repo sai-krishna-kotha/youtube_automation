@@ -79,7 +79,7 @@ class AudioGenerationService:
             raise RuntimeError("Kokoro is not installed or dependencies are missing.")
         if self._kokoro_pipeline is None:
             print(f"[System] Booting Kokoro TTS Engine to memory...")
-            self._kokoro_pipeline = KPipeline(lang_code='a') 
+            self._kokoro_pipeline = KPipeline(lang_code='a', repo_id='hexgrad/Kokoro-82M') 
         return self._kokoro_pipeline
 
     def _get_xtts(self):
