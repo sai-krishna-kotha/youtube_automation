@@ -42,8 +42,8 @@ class GoogleFlowScraper:
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
         self.HEADLESS_MODE = False
         self.MAX_RETRIES = 3
-        self.GENERATE_TIMEOUT = 180000 
-        self.DOWNLOAD_DELAY = 2 
+        self.GENERATE_TIMEOUT = 80000 
+        self.DOWNLOAD_DELAY = 4 
         
         # Optimized prompt prefix for maximum AI comprehension (Faces Only)
         self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features(eyes, mouth) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
