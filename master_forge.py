@@ -196,7 +196,7 @@ def get_project_workspace(channel_dir: Path, channel_output_base: Path) -> Path:
         topic = video_data.get('raw_title', 'Untitled')
         core_theme = video_data.get('core_theme', '')
         hook_paragraph = video_data.get('hook_paragraph')
-        video_length = video_data.get('target_duration_minutes', 3)
+        video_length = video_data.get('target_duration_minutes', 4)
         upscaler_model = video_data.get('upscaler_model', 'realesrgan-x4plus-anime')
         
         voice = voice_data.get('voice_model', voice_data.get('kokoro_model', 'af_bella'))
@@ -334,18 +334,6 @@ def main():
     run_phase2 = phase_choice in ['1', '2', '5']
     manual_mode = phase_choice == '2'
 
-    # --- SELECT AUTOMATION TOOL (Triggers in Manual, Phase 1.5, and Zero-Touch) ---
-    ai_tool_choice = "gemini" 
-    if run_phase1_5:
-        print("\n" + "-"*40)
-        print("   SELECT IMAGE AUTOMATION TOOL")
-        print("-" * 40)
-        print("  1. Gemini (Default)")
-        print("  2. Google Flow")
-        tool_sel = input("\nSelect Tool (1/2): ").strip()
-        ai_tool_choice = "flow" if tool_sel == '2' else "gemini"
-    # -----------------------------------------------------------------------------
-
     # ==============================================================
     # PHASE 1: ASSET CREATION
     # ==============================================================
@@ -370,26 +358,39 @@ def main():
         else:
             final_script = brain.generate_script(request_yaml=raw_yaml_request, max_retries=3)
         
+        # --- AUDIO CONTROL BLOCK ---
+        run_audio = True
         if manual_mode:
-            ans = input("\nProceed to Audio Generation? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            ans = input("\nProceed to Audio Generation? (1: Yes, 3: Skip, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
+            elif ans == '3': run_audio = False; print("[System] Skipping Audio generation...")
 
+        audio_path = None
         existing_audio = list(current_run_dir.glob("*.wav"))
-        if existing_audio:
-            print(f"[Checkpoint] Existing audio found ({existing_audio[0].name}). Skipping TTS Initialization...")
-            audio_path = existing_audio[0] 
-        else:
-            print("\n[Engine] Initializing Smart TTS Pipeline...")
-            from app.services.audio_service import AudioGenerationService
-            audio_engine = AudioGenerationService(output_dir=current_run_dir) 
-            audio_path = audio_engine.generate_audio(text=final_script, voice=audio_voice, speed=audio_speed)
         
+        if run_audio:
+            if existing_audio:
+                print(f"[Checkpoint] Existing audio found ({existing_audio[0].name}). Skipping TTS Initialization...")
+                audio_path = existing_audio[0] 
+            else:
+                print("\n[Engine] Initializing Smart TTS Pipeline...")
+                from app.services.audio_service import AudioGenerationService
+                audio_engine = AudioGenerationService(output_dir=current_run_dir) 
+                audio_path = audio_engine.generate_audio(text=final_script, voice=audio_voice, speed=audio_speed)
+        else:
+            if existing_audio:
+                audio_path = existing_audio[0]
+        
+        # --- TRANSCRIPTION CONTROL BLOCK ---
+        run_transcription = True
         if manual_mode:
-            ans = input("\nProceed to Transcription? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            ans = input("\nProceed to Transcription? (1: Yes, 3: Skip, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
+            elif ans == '3': run_transcription = False; print("[System] Skipping Transcription...")
         
+        batched_json_path = None
         existing_json = [f for f in current_run_dir.glob("*.json") if f.name not in [
             "run_config.json", 
             "metadata.json", 
@@ -398,70 +399,91 @@ def main():
             "script_checkpoint.json"
         ]]
         
-        if existing_json:
-            print(f"[Checkpoint] Transcription JSON found ({existing_json[0].name}). Skipping Whisper Initialization...")
-            batched_json_path = existing_json[0] 
+        if run_transcription:
+            if existing_json:
+                print(f"[Checkpoint] Transcription JSON found ({existing_json[0].name}). Skipping Whisper Initialization...")
+                batched_json_path = existing_json[0] 
+            else:
+                if audio_path:
+                    print("\n[Engine] Initializing WhisperX Transcription Pipeline...")
+                    from app.services.transcription_service import TranscriptionService
+                    transcriber = TranscriptionService(device="cuda", output_dir=current_run_dir) 
+                    batched_json_path = transcriber.extract_and_batch(
+                        audio_path=audio_path, 
+                        request_yaml=raw_yaml_request,
+                        min_duration=30.0, 
+                        max_duration=40.0
+                    )
+                else:
+                    print("[!] No audio found. Cannot execute Transcription pipeline.")
         else:
-            print("\n[Engine] Initializing WhisperX Transcription Pipeline...")
-            from app.services.transcription_service import TranscriptionService
-            transcriber = TranscriptionService(device="cuda", output_dir=current_run_dir) 
-            batched_json_path = transcriber.extract_and_batch(
-                audio_path=audio_path, 
-                request_yaml=raw_yaml_request,
-                min_duration=30.0, 
-                max_duration=40.0
-            )
+            if existing_json:
+                batched_json_path = existing_json[0]
             
+        # --- IMAGE PROMPT CONTROL BLOCK ---
+        run_image_prompts = True
         if manual_mode:
-            ans = input("\nProceed to Image Prompts generation? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            ans = input("\nProceed to Image Prompts generation? (1: Yes, 3: Skip, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
+            elif ans == '3': run_image_prompts = False; print("[System] Skipping Image Prompt generation...")
         
-        print("\n[Pipeline] Validating/Generating Image Prompts...")
-        prompt_engine.generate_all_prompts(
-            transcription_json_path=batched_json_path, 
-            request_yaml=raw_yaml_request, 
-            script_text=final_script,
-            audio_path=audio_path
-        )
+        if run_image_prompts:
+            if batched_json_path and audio_path:
+                print("\n[Pipeline] Validating/Generating Image Prompts...")
+                prompt_engine.generate_all_prompts(
+                    transcription_json_path=batched_json_path, 
+                    request_yaml=raw_yaml_request, 
+                    script_text=final_script,
+                    audio_path=audio_path
+                )
+            else:
+                print("[!] Required inputs (JSON/Audio) missing. Cannot generate image prompts.")
         
+        # --- PACKAGING ENGINE CONTROL BLOCK ---
+        run_packaging = True
         if manual_mode:
-            ans = input("\nProceed to Packaging Engine (Thumbnails & Metadata)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            ans = input("\nProceed to Packaging Engine (Thumbnails & Metadata)? (1: Yes, 3: Skip, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
+            elif ans == '3': run_packaging = False; print("[System] Skipping Packaging Engine...")
                 
-        thumbnail_prompts_path = current_run_dir / "thumbnail-image-prompts.json"
-        is_calling_generate_thumbnail_prompts = not thumbnail_prompts_path.exists()
-        
-        if thumbnail_prompts_path.exists():
-            print("\n[Checkpoint] thumbnail-image-prompts.json found. Loading best concept...")
-            with open(thumbnail_prompts_path, "r", encoding="utf-8") as f:
-                saved_thumbs = json.load(f)
+        if run_packaging:
+            thumbnail_prompts_path = current_run_dir / "thumbnail-image-prompts.json"
+            is_calling_generate_thumbnail_prompts = not thumbnail_prompts_path.exists()
+            
+            if thumbnail_prompts_path.exists():
+                print("\n[Checkpoint] thumbnail-image-prompts.json found. Loading best concept...")
+                with open(thumbnail_prompts_path, "r", encoding="utf-8") as f:
+                    saved_thumbs = json.load(f)
+                    
+                thumbnails_list = [ThumbnailData(**t) for t in saved_thumbs["thumbnails"]]
+                winning_thumbnail = max(thumbnails_list, key=lambda t: t.score)
+                print(f"  -> Resumed Thumbnail Concept: '{winning_thumbnail.text}' (Score: {winning_thumbnail.score})")
                 
-            thumbnails_list = [ThumbnailData(**t) for t in saved_thumbs["thumbnails"]]
-            winning_thumbnail = max(thumbnails_list, key=lambda t: t.score)
-            print(f"  -> Resumed Thumbnail Concept: '{winning_thumbnail.text}' (Score: {winning_thumbnail.score})")
+            else: 
+                winning_thumbnail = packager.generate_thumbnail_prompts(request_yaml=raw_yaml_request, script=final_script)
             
-        else: 
-            winning_thumbnail = packager.generate_thumbnail_prompts(request_yaml=raw_yaml_request, script=final_script)
-        
-        meta_path = current_run_dir / "metadata.json"
-        if meta_path.exists():
-            print("[Checkpoint] metadata.json found. Skipping Packaging Engine...")
-        else:
-            with open(batched_json_path, "r", encoding="utf-8") as f:
-                timestamp_content = f.read() 
-            
-            if is_calling_generate_thumbnail_prompts: 
-                print(f"Waiting {SLEEP_TIME} seconds to protect API rate limits...")
-                time.sleep(SLEEP_TIME) 
-            
-            packager.generate_metadata_json(
-                request_yaml=raw_yaml_request,
-                script_text=final_script, 
-                transcript_timestamps=timestamp_content,
-                target_thumbnail=winning_thumbnail
-            )
+            meta_path = current_run_dir / "metadata.json"
+            if meta_path.exists():
+                print("[Checkpoint] metadata.json found. Skipping Packaging Engine...")
+            else:
+                if batched_json_path:
+                    with open(batched_json_path, "r", encoding="utf-8") as f:
+                        timestamp_content = f.read() 
+                    
+                    if is_calling_generate_thumbnail_prompts: 
+                        print(f"Waiting {SLEEP_TIME} seconds to protect API rate limits...")
+                        time.sleep(SLEEP_TIME) 
+                    
+                    packager.generate_metadata_json(
+                        request_yaml=raw_yaml_request,
+                        script_text=final_script, 
+                        transcript_timestamps=timestamp_content,
+                        target_thumbnail=winning_thumbnail
+                    )
+                else:
+                    print("[!] No transcript JSON found. Cannot generate Metadata.")
             
         raw_dir = current_run_dir / "1_raw_images"
         raw_dir.mkdir(parents=True, exist_ok=True)
@@ -473,6 +495,7 @@ def main():
             print("============================================================")
             print("CHECKPOINT REACHED: ASSET GENERATION COMPLETE")
             print("============================================================\n")
+            sys.exit(0) # FIXED: Process strictly halts here if Phase 1 was selected independently.
 
         if run_phase1_5 and manual_mode:
             ans = input("\nProceed to Phase 1.5 (Auto-Generate Images via Playwright)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
@@ -483,6 +506,15 @@ def main():
     # PHASE 1.5: PLAYWRIGHT IMAGE SCRAPER WITH SMART SELF-HEALING RETRIES
     # ==============================================================
     if run_phase1_5:
+        # --- ASK FOR THE TOOL EXACTLY WHEN NEEDED ---
+        print("\n" + "-"*40)
+        print("   SELECT IMAGE AUTOMATION TOOL")
+        print("-" * 40)
+        print("  1. Gemini (Default)")
+        print("  2. Google Flow")
+        tool_sel = input("\nSelect Tool (1/2): ").strip()
+        ai_tool_choice = "flow" if tool_sel == '2' else "gemini"
+
         print(f"\n[Engine] Initializing {ai_tool_choice.title()} Image Automation...")
         
         if ai_tool_choice == "flow":
@@ -512,7 +544,7 @@ def main():
             pack_system_data(current_run_dir)
             sys.exit(1)
             
-        max_repair_passes = 3
+        max_repair_passes = 10
         
         for pass_num in range(1, max_repair_passes + 1):
             print(f"\n[Engine] Image Generation Pass {pass_num}/{max_repair_passes}...")
@@ -556,7 +588,10 @@ def main():
                     print("[!] Max repair passes reached. Proceeding with currently available images.")
         
         if not run_phase2:
+            print("\n[System] Packing internal data files into _system_data folder...")
             pack_system_data(current_run_dir)
+            print("\n[System] Phase 1.5 Complete. Exiting as requested.")
+            sys.exit(0) # FIXED: Added explicit system exit so it doesn't process downstream blocks silently.
             
         if run_phase2 and manual_mode:
             ans = input("\nProceed to Phase 2 (Final Render Pipeline)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
