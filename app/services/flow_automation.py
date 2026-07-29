@@ -16,8 +16,8 @@ class GoogleFlowScraper:
         
         # --- ACCOUNT CONFIGURATION ---
         self.account_order = [
-            "flow_session_1",
             "flow_session_2",
+            "flow_session_1",
         ]
         
         self.session_directories = [base_dir / name for name in self.account_order]
