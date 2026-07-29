@@ -42,14 +42,13 @@ class GoogleFlowScraper:
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
         self.HEADLESS_MODE = False
         self.MAX_RETRIES = 3
-        self.GENERATE_TIMEOUT = 120000 
         self.DOWNLOAD_DELAY = 4 
         
         # --- 🔴 MASTER TOGGLE FOR IMAGE CHAINING 🔴 ---
         # Set to True: Uploads previous image as a reference for consistency.
         # Set to False: Skips upload, runs faster, generates purely from text.
         self.ENABLE_IMAGE_CHAINING = False 
-        
+        self.GENERATE_TIMEOUT = 120000 if self.ENABLE_IMAGE_CHAINING else 80000 
         # Default prefix for the VERY FIRST image in a sequence (or when chaining is OFF)
         self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features(eyes, mouth) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
         
