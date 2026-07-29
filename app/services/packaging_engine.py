@@ -128,6 +128,7 @@ class PackagingService:
         # 3. Format it as a string to inject into the metadata prompt
         if real_links:
             formatted_sources = "\n[SOURCES TO CITE]\n" + "\n".join(real_links)
+            print(f"\nFormatted Sources: \n{formatted_sources}")
             return formatted_sources
         return ""
     
@@ -138,7 +139,6 @@ class PackagingService:
         full_payload = script_text + "\n\n" + auto_links
         channel_context = self._get_channel_context()
         instructions = self._read_master_prompt("metadata_generator.md")
-        print(f"\n\n\n\nFull payload:\n\n{full_payload}\n\n\n\n")
         # Inject the winning thumbnail directly into the Metadata prompt!
         prompt = (
             f"{channel_context}"
@@ -172,21 +172,113 @@ class PackagingService:
             description_clean = description.replace('\\n', '\n')
             tags_clean = ", ".join(tags) if isinstance(tags, list) else str(tags)
             
-            # 4. Save to a highly structured metadata.txt (For easy copy-pasting)
+            # Save to a highly structured metadata.txt
             txt_path = self.output_dir / "metadata.txt"
+
             with open(txt_path, "w", encoding="utf-8") as f:
-                f.write("=========================================\n")
-                f.write("📋 YOUTUBE UPLOAD METADATA PACKAGE 📋\n")
-                f.write("=========================================\n\n")
-                
-                f.write("--- [COPY TITLE BELOW] ---\n")
+
+                f.write("=============================================================\n")
+                f.write("📋 YOUTUBE UPLOAD METADATA PACKAGE\n")
+                f.write("=============================================================\n\n")
+
+                # --------------------------------------------------
+                # TITLE
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("TITLE\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
                 f.write(f"{title}\n\n")
-                
-                f.write("--- [COPY DESCRIPTION BELOW] ---\n")
+
+                # --------------------------------------------------
+                # DESCRIPTION
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("DESCRIPTION\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
                 f.write(f"{description_clean}\n\n")
-                
-                f.write("--- [COPY TAGS BELOW] ---\n")
-                f.write(f"{tags_clean}\n")
+
+                # --------------------------------------------------
+                # PRIMARY SEO KEYWORDS
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("PRIMARY SEO KEYWORDS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(", ".join(metadata_dict["seo_keywords"]["primary"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # SECONDARY SEO KEYWORDS
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("SECONDARY LONG-TAIL KEYWORDS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(", ".join(metadata_dict["seo_keywords"]["secondary"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # AUTOCOMPLETE
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("YOUTUBE AUTOCOMPLETE KEYWORDS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(", ".join(metadata_dict["seo_keywords"]["autocomplete"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # SEARCH QUESTIONS
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("COMMON SEARCH QUESTIONS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+
+                for q in metadata_dict["seo_keywords"]["questions"]:
+                    f.write(f"• {q}\n")
+
+                f.write("\n")
+
+                # --------------------------------------------------
+                # ENTITIES
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("ENTITIES\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(", ".join(metadata_dict["seo_keywords"]["entities"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # HASHTAGS
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("HASHTAGS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(" ".join(metadata_dict["hashtags"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # TAGS
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("YOUTUBE TAGS\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(", ".join(metadata_dict["tags"]))
+                f.write("\n\n")
+
+                # --------------------------------------------------
+                # SCORE
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("ESTIMATED PERFORMANCE\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(f"SEO / CTR Score : {metadata_dict['score']}/100\n\n")
+
+                # --------------------------------------------------
+                # EXPLANATION
+                # --------------------------------------------------
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("WHY THIS SHOULD PERFORM WELL\n")
+                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write(metadata_dict["explanation"])
+                f.write("\n")
                 
             print(f"[Packaging] Success! High-CTR metadata bundle saved to: {json_path.name}")
             print(f"[Packaging] Success! Copy-paste ready format saved to: {txt_path.name}")
