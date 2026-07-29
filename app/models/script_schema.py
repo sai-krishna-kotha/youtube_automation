@@ -66,28 +66,100 @@ class SingleShotPrompt(BaseModel):
 
 class BatchPromptResponse(BaseModel):
     shots: list[SingleShotPrompt] = Field(..., description="The list of generated image prompts mapping 1:1 to the transcript segment timestamps.")
-    
+
 
 class ThumbnailData(BaseModel):
-    image_prompt: str = Field(description="The highly detailed, exact image generation prompt for an AI tool to create this visual (including lighting, style, and composition).")
-    text: str = Field(description="The exact text embedded in the thumbnail. Maximum 2-5 words.")
-    concept: str = Field(description="A concise description of the thumbnail concept, including the visual scene and the curiosity gap it creates.")
-    score: int = Field(description="Estimated thumbnail CTR score from 0 to 100.")
-    explanation: str = Field(description="Brief explanation of why this thumbnail concept and title are expected to achieve a high click-through rate.")
-    
+    image_prompt: str = Field(
+        description="Detailed production-ready, standalone image generation prompt."
+    )
+
+    text: str = Field(
+        description="Thumbnail text. 2-5 words maximum."
+    )
+
+    concept: str = Field(
+        description="Thumbnail visual concept and curiosity gap."
+    )
+
+    score: int = Field(
+        description="Estimated CTR score from 0-100."
+    )
+
+    explanation: str = Field(
+        description="Why this thumbnail is expected to perform well."
+    )
+
+
 class ThumbnailResponse(BaseModel):
-    thumbnails: List[ThumbnailData] = Field(description="List of exactly 5 distinct thumbnail concepts.")
+    thumbnails: List[ThumbnailData]
+
+
+# -----------------------------
+# SEO
+# -----------------------------
+
+class SEOKeywords(BaseModel):
+
+    primary: List[str] = Field(
+        description="20-30 high volume primary search keywords."
+    )
+
+    secondary: List[str] = Field(
+        description="40-60 long-tail keywords."
+    )
+
+    autocomplete: List[str] = Field(
+        description="20-40 YouTube autocomplete style phrases."
+    )
+
+    questions: List[str] = Field(
+        description="20-30 search questions users may type."
+    )
+
+    entities: List[str] = Field(
+        description="Important people, companies, technologies, products, concepts and events from the script."
+    )
+
+
+# -----------------------------
+# Metadata
+# -----------------------------
 
 class VideoMetadata(BaseModel):
-    title: str = Field(description="A 50-0 character high-CTR title maximizing curiosity gaps, directly related to the thumbnail text/concept.")
-    description: str = Field(description="A compelling 2-paragraph hook, followed strictly by timestamped CHAPTERS formatted as 'MM:SS Title', KEYWORDS, and HASHTAGS with clear double line breaks.")
-    tags: str = Field(description="Comma-separated SEO tags for tags input field.")
-    score: int = Field(description="Estimated CTR/SEO score out of 100 based on title curiosity and keyword volume.")
-    explanation: str = Field(description="Brief explanation of why this title and metadata will perform well on YouTube.")
-    
-class VideoMetadata(BaseModel):
-    title: str = Field(description="A 50-60 character high-CTR title maximizing curiosity gaps.")
-    description: str = Field(description="A compelling 2-paragraph hook, followed strictly by timestamped CHAPTERS formatted as 'MM:SS Title', KEYWORDS, and HASHTAGS with clear double line breaks.")
-    tags: str = Field(description="Comma-separated SEO tags for tags input field.")
-    score: int = Field(description="Estimated CTR/SEO score out of 100 based on title curiosity and keyword volume.")
-    explanation: str = Field(description="Brief explanation of why this title and metadata will perform well on YouTube.")
+
+    title: str = Field(
+        description="50-55 character high CTR YouTube title. Must complement, not duplicate, thumbnail text."
+    )
+
+    description: str = Field(
+        description=(
+            "2500-4500 character SEO-optimized YouTube description. "
+            "Must contain documentary-style introduction, chapters, research links, "
+            "channel sections, production credits and hashtags."
+        )
+    )
+
+    seo_keywords: SEOKeywords = Field(
+        description="Complete structured SEO keyword package."
+    )
+
+    hashtags: List[str] = Field(
+        description="15-25 lowercase hashtags."
+    )
+
+    tags: List[str] = Field(
+        description=(
+            "Comma-field tags as individual strings. "
+            "Total combined characters should stay under YouTube's 500-character limit."
+        )
+    )
+
+    score: int = Field(
+        ge=0,
+        le=100,
+        description="Estimated SEO/CTR score."
+    )
+
+    explanation: str = Field(
+        description="Why this metadata package should perform well."
+    )
