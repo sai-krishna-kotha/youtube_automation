@@ -127,7 +127,7 @@ class TranscriptionService:
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=self.device)
         aligned_result = whisperx.align(result["segments"], model_a, metadata, audio, self.device, return_char_alignments=False)
         
-        ideal_punc = target_freq * 0.60
+        ideal_punc = target_freq * 0.20
         ideal_conj = target_freq * 0.80
         
         punc_limit = max(0.8, ideal_punc)
