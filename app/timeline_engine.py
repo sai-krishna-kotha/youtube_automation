@@ -92,7 +92,7 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
         prev_duration = parsed_data[i-1]["duration"]
         start_time_sec = parsed_data[i]["time"]
         
-        if prev_duration > 2.0:
+        if prev_duration > 0.5:
             sfx_choice = random.choice(sfx_files)
             sfx = AudioSegment.from_file(str(sfx_choice))
             sfx = sfx - 4 
@@ -111,7 +111,7 @@ def build_video(project_dir: Path):
     if not FFMPEG_EXE.exists():
         print(f"\n[!] ERROR: FFmpeg not found at {FFMPEG_EXE}")
         sys.exit(1)
-
+    raw_images = project_dir / "1_raw_images"
     upscale_dir = project_dir / "3_upscaled"
     audio_path = project_dir / "audio.wav"
     temp_dir = project_dir / "temp_video_clips"
@@ -127,8 +127,9 @@ def build_video(project_dir: Path):
     # --- 1. PARSE TIMESTAMPS & EXACT DURATIONS ---
     images = [f for f in upscale_dir.iterdir() if f.suffix.lower() in ['.png', '.jpg', '.jpeg']]
     
-    # UPGRADE: More robust regex. Brackets are optional, but strictly captures hyphenated timestamps
-    pattern = re.compile(r'\[?([\d_]+)-([\d_]+)\]?')
+    # FIXED: Made the brackets strictly required. 
+    # This prevents the regex from accidentally grabbing hyphenated numbers (like resolutions) at the end of filenames.
+    pattern = re.compile(r'\[([\d_]+)-([\d_]+)\]')
     
     parsed_data = []
     for img in images:
@@ -226,7 +227,7 @@ def build_video(project_dir: Path):
             else: 
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='max(0,(iw-iw/zoom)-0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
 
-            vf_chain = f"scale=6000:3375,{motion_filter},noise=alls=2:allf=t"
+            vf_chain = f"scale=8000:4500,{motion_filter},noise=alls=2:allf=t"
 
             fade_duration = 0.3
             fade_start = max(0.0, duration - fade_duration)
