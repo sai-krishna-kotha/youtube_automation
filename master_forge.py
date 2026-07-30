@@ -248,6 +248,14 @@ def main():
     load_dotenv()
     base_dir = Path(__file__).resolve().parent
     
+    # --- SMART SESSION DIRECTORY ARCHITECTURE ---
+    sessions_dir = base_dir / "sessions"
+    sessions_dir.mkdir(exist_ok=True)
+    (sessions_dir / "flow").mkdir(exist_ok=True)
+    (sessions_dir / "gemini").mkdir(exist_ok=True)
+    (sessions_dir / "vibes").mkdir(exist_ok=True)
+    # ------------------------------------------
+
     master_prompts_dir, channel_dir, channel_output_base, channel_slug = setup_channel(base_dir)
     current_run_dir = get_project_workspace(channel_dir, channel_output_base)
     
@@ -301,41 +309,56 @@ def main():
     print("\n" + "-"*40)
     print("   SELECT FACTORY PIPELINE")
     print("-" * 40)
-    print("  1. FULLY AUTOMATED (Phase 1 -> 1.5 -> 2)")
+    print("  1. FULLY AUTOMATED (Seamless Run)")
     print("  2. MANUAL MODE (Step-by-step with pauses)")
-    print("  3. Run Phase 1 Only (Build Assets)")
-    print("  4. Run Phase 1.5 Only (Auto-Generate Images)")
-    print("  5. Run Phase 2 Only (Final Render)")
-    print("  6. Setup Gemini Authentication (Run Once)")
-    print("  7. Setup Google Flow Authentication (Run Once)")
+    print("  3. Run Phase 1 Only (Build Core Assets)")
+    print("  4. Run Phase 2 Only (Generate Static Images)")
+    print("  5. Run Phase 3 Only (Vibes AI Video Generation) [OPTIONAL]")
+    print("  6. Run Phase 4 Only (Final Render & Assembly)")
+    print("  7. Setup Gemini Authentication (Run Once)")
+    print("  8. Setup Google Flow Authentication (Run Once)")
+    print("  9. Setup Vibes AI Authentication (Run Once)")
     print("  0. To Exit")
     
-    phase_choice = input("\nSelect Option (0-7): ").strip()
+    phase_choice = input("\nSelect Option (0-9): ").strip()
     
     if phase_choice == '0':
         pack_system_data(current_run_dir)
         sys.exit(0)
         
-    if phase_choice == '6':
+    # --- ONE-TIME AUTHENTICATION SETUP ---
+    if phase_choice == '7':
         from app.services.image_automation import GeminiImageScraper
-        scraper = GeminiImageScraper(base_dir=base_dir)
+        scraper = GeminiImageScraper(base_dir=sessions_dir / "gemini")
         scraper.setup_session()
         sys.exit(0)
 
-    if phase_choice == '7':
+    if phase_choice == '8':
         from app.services.flow_automation import GoogleFlowScraper
-        scraper = GoogleFlowScraper(base_dir=base_dir)
+        scraper = GoogleFlowScraper(base_dir=sessions_dir / "flow")
+        scraper.setup_session()
+        sys.exit(0)
+        
+    if phase_choice == '9':
+        from app.services.vibes_automation import VibesAIAutomator
+        scraper = VibesAIAutomator(base_dir=sessions_dir / "vibes")
         scraper.setup_session()
         sys.exit(0)
         
     # --- PIPELINE ROUTING FLAGS ---
     run_phase1 = phase_choice in ['1', '2', '3']
-    run_phase1_5 = phase_choice in ['1', '2', '4']
-    run_phase2 = phase_choice in ['1', '2', '5']
+    run_phase2 = phase_choice in ['1', '2', '4']
+    run_phase3 = phase_choice in ['2', '5']
+    run_phase4 = phase_choice in ['1', '2', '6']
     manual_mode = phase_choice == '2'
 
+    if phase_choice == '1':
+        ans = input("\n[?] Do you want to include optional Vibes AI Video generation? (1: Yes, 0: No): ").strip()
+        if ans == '1':
+            run_phase3 = True
+
     # ==============================================================
-    # PHASE 1: ASSET CREATION
+    # PHASE 1: ASSET CREATION (Core Script, Audio, Prompts)
     # ==============================================================
     if run_phase1:
         print("\n[Engine] Initializing Phase 1 Pipeline...")
@@ -489,24 +512,23 @@ def main():
         raw_dir.mkdir(parents=True, exist_ok=True)
         print("\n[System] Phase 1 Complete.")
         
-        if not run_phase1_5:
+        if not (run_phase2 or run_phase3 or run_phase4):
             print("\n[System] Packing internal data files into _system_data folder...")
             pack_system_data(current_run_dir)
             print("============================================================")
             print("CHECKPOINT REACHED: ASSET GENERATION COMPLETE")
             print("============================================================\n")
-            sys.exit(0) # FIXED: Process strictly halts here if Phase 1 was selected independently.
+            sys.exit(0) 
 
-        if run_phase1_5 and manual_mode:
-            ans = input("\nProceed to Phase 1.5 (Auto-Generate Images via Playwright)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+        if run_phase2 and manual_mode:
+            ans = input("\nProceed to Phase 2 (Auto-Generate Images via Playwright)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
     # ==============================================================
-    # PHASE 1.5: PLAYWRIGHT IMAGE SCRAPER WITH SMART SELF-HEALING RETRIES
+    # PHASE 2: STATIC IMAGE SCRAPER WITH SMART SELF-HEALING RETRIES
     # ==============================================================
-    if run_phase1_5:
-        # --- ASK FOR THE TOOL EXACTLY WHEN NEEDED ---
+    if run_phase2:
         print("\n" + "-"*40)
         print("   SELECT IMAGE AUTOMATION TOOL")
         print("-" * 40)
@@ -519,13 +541,13 @@ def main():
         
         if ai_tool_choice == "flow":
             from app.services.flow_automation import GoogleFlowScraper
-            scraper = GoogleFlowScraper(base_dir=base_dir)
+            scraper = GoogleFlowScraper(base_dir=sessions_dir / "flow")
         else:
             from app.services.image_automation import GeminiImageScraper
-            scraper = GeminiImageScraper(base_dir=base_dir)
+            scraper = GeminiImageScraper(base_dir=sessions_dir / "gemini")
         
         # --- THE AUTO-AUTH INTERCEPT ---
-        if not scraper.session_dir.exists():
+        if not scraper.session_directories or not scraper.session_directories[0].exists():
             print(f"\n[!] {ai_tool_choice.title()} Authentication missing! Pausing pipeline to authenticate...")
             scraper.setup_session()
             
@@ -587,22 +609,99 @@ def main():
                 else:
                     print("[!] Max repair passes reached. Proceeding with currently available images.")
         
-        if not run_phase2:
+        if not (run_phase3 or run_phase4):
             print("\n[System] Packing internal data files into _system_data folder...")
             pack_system_data(current_run_dir)
-            print("\n[System] Phase 1.5 Complete. Exiting as requested.")
-            sys.exit(0) # FIXED: Added explicit system exit so it doesn't process downstream blocks silently.
+            print("\n[System] Phase 2 Complete. Exiting as requested.")
+            sys.exit(0) 
             
-        if run_phase2 and manual_mode:
-            ans = input("\nProceed to Phase 2 (Final Render Pipeline)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+        if run_phase3 and manual_mode:
+            ans = input("\nProceed to Phase 3 (Vibes AI Video Generation)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
     # ==============================================================
-    # PHASE 2: FINAL RENDER
+    # PHASE 3: VIBES AI VIDEO GENERATION [OPTIONAL]
     # ==============================================================
-    if run_phase2:
-        print("\n[Engine] Initializing Phase 2 (Asset Processing & Render)...")
+    if run_phase3:
+        print("\n" + "="*50)
+        print("   PHASE 3: VIBES AI VIDEO GENERATION")
+        print("="*50)
+        
+        from app.services.vibes_prompt_service import VibesPromptService
+        from app.services.vibes_automation import VibesAIAutomator
+        from app.services.llm_client import GeminiClient
+        
+        # --- THE FIX: Ignore system config files and specifically grab the transcription batch file ---
+        existing_jsons = [f for f in current_run_dir.glob("*.json") if f.name not in [
+            "run_config.json", 
+            "metadata.json", 
+            "prompts_checkpoint.json", 
+            "thumbnail-image-prompts.json",
+            "script_checkpoint.json",
+            "animation_prompts_checkpoint.json"
+        ]]
+        transcription_json = existing_jsons[0] if existing_jsons else None
+        
+        if not transcription_json:
+            print("\n[!] Failed to find transcription JSON. Aborting Phase 3.")
+            sys.exit(1)
+            
+        static_prompts_file = current_run_dir / "time_stamped_prompts.txt"
+        raw_images_dir = current_run_dir / "1_raw_images"
+        upscale_dir = current_run_dir / "3_upscaled" # Target directory for videos
+        
+        # 1. Generate Animation Prompts
+        llm = GeminiClient()
+        prompt_service = VibesPromptService(llm_client=llm, output_dir=current_run_dir)
+        animation_prompts_file = prompt_service.generate_animation_prompts(
+            transcription_json_path=transcription_json,
+            static_prompts_path=static_prompts_file
+        )
+        
+        if not animation_prompts_file:
+            print("\n[!] Failed to generate animation prompts. Aborting Phase 3.")
+            pack_system_data(current_run_dir)
+            sys.exit(1)
+            
+        # 2. Initialize Vibes Automator
+        print("\n[Engine] Initializing Vibes AI Automation...")
+        vibes_scraper = VibesAIAutomator(base_dir=sessions_dir / "vibes")
+        
+        # --- THE AUTO-AUTH INTERCEPT ---
+        if not vibes_scraper.session_dirs[0].exists():
+            print(f"\n[!] Vibes AI Authentication missing! Pausing pipeline to authenticate...")
+            vibes_scraper.setup_session()
+            
+            auth_proceed = input("\nAuthentication complete. Do you want to proceed with video generation? (1: Yes, 0: Exit): ").strip()
+            if auth_proceed != '1':
+                pack_system_data(current_run_dir)
+                sys.exit(0)
+        # --------------------------------
+        
+        # 3. Generate Videos
+        vibes_scraper.generate_animations(
+            prompts_file=animation_prompts_file,
+            image_dir=raw_images_dir,
+            output_dir=upscale_dir
+        )
+        
+        if not run_phase4:
+            print("\n[System] Packing internal data files into _system_data folder...")
+            pack_system_data(current_run_dir)
+            print("\n[System] Phase 3 Complete. Exiting as requested.")
+            sys.exit(0)
+            
+        if run_phase4 and manual_mode:
+            ans = input("\nProceed to Phase 4 (Final Render Pipeline)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
+            elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
+
+    # ==============================================================
+    # PHASE 4: FINAL RENDER
+    # ==============================================================
+    if run_phase4:
+        print("\n[Engine] Initializing Phase 4 (Asset Processing & Render)...")
         
         raw_dir = current_run_dir / "1_raw_images"
         wm_dir = current_run_dir / "2_watermark_removed"
@@ -612,22 +711,28 @@ def main():
         
         raw_count = len([f for f in raw_dir.iterdir() if f.is_file()]) if raw_dir.exists() else 0
         wm_count = len([f for f in wm_dir.iterdir() if f.is_file()]) if wm_dir.exists() else 0
-        up_count = len([f for f in up_dir.iterdir() if f.is_file()]) if up_dir.exists() else 0
+        
+        # Count files across upscaled dir (including subfolders for AI variants)
+        up_count = 0
+        if up_dir.exists():
+            for root, dirs, files in os.walk(up_dir):
+                up_count += len([f for f in files if not f.startswith('.')])
+                
         final_count = len([f for f in final_dir.iterdir() if f.is_file()]) if final_dir.exists() else 0
         
         if raw_count == 0 and wm_count == 0 and up_count == 0 and final_count == 0:
-            print("\n[!] ERROR: '1_raw_images' is completely empty! Run Phase 1.5 first.")
+            print("\n[!] ERROR: '1_raw_images' is completely empty! Run Phase 2 first.")
             pack_system_data(current_run_dir)
             sys.exit(1)
             
         print("\n--- FACTORY CHECKPOINT STATUS ---")
         print(f"  [{'✓' if raw_count > 0 else ' '}] {raw_count} images in 1_raw_images")
-        print(f"  [{'✓' if wm_count > 0 else ' '}] {wm_count} images in 2_watermark_removed")
-        print(f"  [{'✓' if up_count > 0 else ' '}] {up_count} images in 3_upscaled")
-        print(f"  [{'✓' if final_count > 0 else ' '}] {final_count} images in 4_final_production")
+        print(f"  [{'✓' if wm_count > 0 else ' '}] {wm_count} files in 2_watermark_removed")
+        print(f"  [{'✓' if up_count > 0 else ' '}] {up_count} files in 3_upscaled")
+        print(f"  [{'✓' if final_count > 0 else ' '}] {final_count} files in 4_final_production")
         
-        if manual_mode or phase_choice == '5':
-            print("\n--- PHASE 2 ACTION MENU ---")
+        if manual_mode or phase_choice == '6':
+            print("\n--- PHASE 4 ACTION MENU ---")
             print("  1. Run Full Render Pipeline (Watermark -> Upscale -> Rename -> Assembly)")
             print("  2. Run Watermark Removal Only")
             print("  3. Run Upscaler Only (Resumes from watermark folder)")
@@ -635,18 +740,23 @@ def main():
             print("  5. Run Timeline Assembly Only (Bypasses image processing)")
             print("  0. To Exit")
             
-            p2_choice = input("\nSelect action: ").strip()
-            if p2_choice == '0':
+            p4_choice = input("\nSelect action: ").strip()
+            if p4_choice == '0':
                 pack_system_data(current_run_dir)
                 sys.exit(0)
                 
             generate_video = input("\nDo you want to generate video now? (1: Yes, 0: No): ").strip()
         else:
             print("\n[System] Fully Automated Mode: Executing Full Render Pipeline...")
-            p2_choice = '1'
+            p4_choice = '1'
             generate_video = '1'
+            
+            # SMART BYPASS: If we ran Vibes AI, we skip static image upscaling entirely
+            if run_phase3 or (up_dir.exists() and any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir())):
+                print("\n[System] Vibes AI Video variants detected in upscale folder. Bypassing static image processing (Watermark/Upscale/Rename)...")
+                p4_choice = '5' # Jump straight to Assembly Engine!
         
-        if p2_choice in ['1', '2']:
+        if p4_choice in ['1', '2']:
             if manual_mode:
                 current_state = "1" if enable_watermark_remover else "0"
                 override = input(f"\nRun watermark remover? (1: Yes, 0: No) [Current: {current_state}]: ").strip()
@@ -660,20 +770,23 @@ def main():
             else:
                 print("\n[System] Watermark removal toggled OFF. Bypassing directly to upscaler...")
             
-        if p2_choice in ['1', '3']:
+        if p4_choice in ['1', '3']:
             source_dir = wm_dir if wm_dir.exists() and any(wm_dir.iterdir()) else raw_dir
             m2.run_upscaler(source_dir, up_dir, temp_dir, target_upscaler)
             
-        if p2_choice in ['1', '4']:
+        if p4_choice in ['1', '4']:
             source_dir = up_dir if up_dir.exists() and any(up_dir.iterdir()) else wm_dir
             if not source_dir.exists() or not any(source_dir.iterdir()):
                 source_dir = raw_dir
             m2.run_renamer(source_dir, final_dir)
             
-        if p2_choice in ['1', '5']:
+        if p4_choice in ['1', '5']:
             if generate_video == '1':
                 print("\n[Engine] Assets processed. Handing off to Cinematic Timeline Engine...")
-                m3.build_video(current_run_dir)
+                
+                # Determine media mode intelligently for the engine based on folder contents
+                media_mode_override = "video" if any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir()) else "image"
+                m3.build_video(current_run_dir, media_mode=media_mode_override)
             else:
                 print("\n[!] Video generation skipped. Your assets are ready !!")
                 

@@ -17,5 +17,9 @@ flow_session_2/
 google_flow_module/
 promptss/
 app/api_state_checkpoint.json
-vibes/
+
+vibes_auth_*
+vibes_video_*
+
 sessions/
+vibes/
