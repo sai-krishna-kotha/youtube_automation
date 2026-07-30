@@ -15,7 +15,7 @@ generated_assets/
 flow_session_1/
 flow_session_2/
 google_flow_module/
-promptss/
+prompts/
 app/api_state_checkpoint.json
 
 vibes_auth_*

@@ -52,7 +52,7 @@ def setup_channel(base_dir: Path) -> tuple[Path, Path, Path, str]:
     print("   THE MASTER FORGE (ZERO-TOUCH AUTOMATION)")
     print("="*terminal_width)
     
-    prompt_os_dir = base_dir / "promptss"
+    prompt_os_dir = base_dir / "prompts"
     master_prompts_dir = prompt_os_dir / "master_prompts"
     channels_dir = prompt_os_dir / "channels"
     
