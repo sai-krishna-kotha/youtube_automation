@@ -15,9 +15,10 @@ class GoogleFlowScraper:
         self.base_dir = base_dir
         
         # --- ACCOUNT CONFIGURATION ---
+        # Updated to match the new clean 'session_1', 'session_2' structure
         self.account_order = [
-            "flow_session_2",
-            "flow_session_1",
+            "session_1",
+            "session_2",
         ]
         
         self.session_directories = [base_dir / name for name in self.account_order]
@@ -30,8 +31,8 @@ class GoogleFlowScraper:
 
         valid_sessions = [d for d in self.session_directories if d.exists()]
         if not valid_sessions:
-            print("[Warning] No valid session folders found. Defaulting to flow_session_1")
-            self.session_directories = [base_dir / "flow_session_1"]
+            print("[Warning] No valid session folders found. Defaulting to session_1")
+            self.session_directories = [base_dir / "session_1"]
         else:
             self.session_directories = valid_sessions
 
@@ -42,9 +43,9 @@ class GoogleFlowScraper:
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
         self.HEADLESS_MODE = False
         self.MAX_RETRIES = 3
-        self.DOWNLOAD_DELAY = 4 
+        self.DOWNLOAD_DELAY = 1 
         
-        # --- 🔴 MASTER TOGGLE FOR IMAGE CHAINING 🔴 ---
+        # --- ⚙️ MASTER TOGGLE FOR IMAGE CHAINING ⚙️ ---
         # Set to True: Uploads previous image as a reference for consistency.
         # Set to False: Skips upload, runs faster, generates purely from text.
         self.ENABLE_IMAGE_CHAINING = False 
@@ -65,7 +66,8 @@ class GoogleFlowScraper:
             status = "[Exists]" if (self.base_dir / d).exists() else "[Missing]"
             print(f" - {d} {status}")
             
-        new_name = input("\nEnter folder name to setup/login (e.g., flow_session_1): ").strip()
+        # Updated prompt text
+        new_name = input("\nEnter folder name to setup/login (e.g., session_1): ").strip()
         if not new_name:
             print("Aborted.")
             return
@@ -171,7 +173,7 @@ class GoogleFlowScraper:
                 if sign_in_btn.is_visible(timeout=5000):
                     print("  -> 'Sign in' screen detected. Clicking to authenticate using saved session...")
                     sign_in_btn.click()
-                    page.wait_for_load_state("networkidle", timeout=30000)
+                    page.wait_for_load_state("networkidle", timeout=120000)
                 else:
                     print("  -> Active session verified.")
             except Exception:
