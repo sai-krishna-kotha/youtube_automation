@@ -230,12 +230,12 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
         if media_mode == "image":
             cmd = (
                 f'"{FFMPEG_EXE}" -loop 1 -i "{m_path}" '
-                f'-vf "{vf_chain}" -c:v h264_nvenc -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
+                f'-vf "{vf_chain}" -c:v h264_nvenc -b:v 30M -maxrate 35M -bufsize 35M -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
             )
         else:
             cmd = (
                 f'"{FFMPEG_EXE}" -i "{m_path}" '
-                f'-vf "{vf_chain}" -c:v h264_nvenc -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
+                f'-vf "{vf_chain}" -c:v h264_nvenc -b:v 30M -maxrate 35M -bufsize 35M -t {duration} -pix_fmt yuv420p -y "{clip_path}"'
             )
         
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
