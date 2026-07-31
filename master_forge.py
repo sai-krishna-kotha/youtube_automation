@@ -356,6 +356,27 @@ def main():
         ans = input("\n[?] Do you want to include optional Vibes AI Video generation? (1: Yes, 0: No): ").strip()
         if ans == '1':
             run_phase3 = True
+            
+    # --- NEW: TIMELINE ENGINE OUTPUT SELECTION ---
+    enable_ffmpeg = True
+    enable_capcut = False
+    
+    if run_phase4:
+        print("\n" + "-"*40)
+        print("   SELECT OUTPUT PIPELINE (PHASE 4)")
+        print("-" * 40)
+        print("  1. FFmpeg Master Render Only (DEFAULT)")
+        print("  2. CapCut Draft Injection Only")
+        print("  3. BOTH (FFmpeg Render + CapCut Draft)")
+        
+        p_choice = input("\nSelect Output Pipeline (1, 2, or 3) [Press Enter for 1]: ").strip()
+        
+        if p_choice == '2':
+            enable_ffmpeg = False
+            enable_capcut = True
+        elif p_choice == '3':
+            enable_ffmpeg = True
+            enable_capcut = True
 
     # ==============================================================
     # PHASE 1: ASSET CREATION (Core Script, Audio, Prompts)
@@ -786,7 +807,7 @@ def main():
                 
                 # Determine media mode intelligently for the engine based on folder contents
                 media_mode_override = "video" if any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir()) else "image"
-                m3.build_video(current_run_dir, media_mode=media_mode_override)
+                m3.build_video(current_run_dir, media_mode=media_mode_override, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
             else:
                 print("\n[!] Video generation skipped. Your assets are ready !!")
                 
