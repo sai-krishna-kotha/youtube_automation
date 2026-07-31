@@ -5,6 +5,9 @@ import random
 import subprocess
 import shutil
 import wave
+import json
+import uuid
+import time
 from datetime import datetime
 from pathlib import Path
 from pydub import AudioSegment
@@ -99,7 +102,6 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
             
             insert_ms = int(start_time_sec * 1000) - 200 
             insert_ms = max(0, insert_ms)
-            print(f"\t\tsfx: {sfx_choice.name} added at {start_time_sec: 05.2f} for {prev_duration: 05.2f} duration")
             main_audio = main_audio.overlay(sfx, position=insert_ms)
 
     main_audio.export(str(mixed_audio_path), format="wav")
@@ -107,12 +109,212 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
     
     return mixed_audio_path
 
-def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, variant_tag: str = ""):
-    """Assembles a single complete video file from a target directory."""
-    if not FFMPEG_EXE.exists():
-        print(f"\n[!] ERROR: FFmpeg not found at {FFMPEG_EXE}")
-        sys.exit(1)
+def generate_capcut_id():
+    """Generates a CapCut-compliant UUID."""
+    import uuid
+    return str(uuid.uuid4()).upper()
+
+def export_capcut_draft(parsed_data, project_dir: Path, audio_path: Path):
+    """Duplicates a blank CapCut template and safely injects timeline data with native UI physics."""
+    import json
+    import time
+    import shutil
+    import os
+    
+    print("\n[CapCut Engine] Initializing Golden Template Injection...")
+    
+    local_appdata = os.getenv('LOCALAPPDATA')
+    if not local_appdata:
+        print("  [!] ERROR: Could not locate LOCALAPPDATA environment variable.")
+        return
+
+    base_drafts_path = Path(local_appdata) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft"
+    template_path = base_drafts_path / "Golden_Template"
+    
+    if not template_path.exists():
+        print("  [!] ERROR: 'Golden_Template' not found in CapCut!")
+        print("  [!] Please create a blank project named 'Golden_Template' and close CapCut.")
+        return
+
+    project_name = f"AutoDraft_{project_dir.name}"
+    draft_path = base_drafts_path / project_name
+
+    if draft_path.exists():
+        print(f"  [!] Draft '{project_name}' already exists. Overwriting...")
+        shutil.rmtree(draft_path)
+
+    try:
+        # 1. Duplicate the Golden Template (Leaving original UIDs perfectly intact)
+        shutil.copytree(template_path, draft_path)
         
+        # 2. Update Meta Info (Name, Paths, and Timestamp ONLY)
+        meta_file = draft_path / "draft_meta_info.json"
+        if meta_file.exists():
+            with open(meta_file, "r", encoding="utf-8") as f:
+                meta_data = json.load(f)
+                
+            meta_data["draft_name"] = project_name
+            meta_data["draft_root_path"] = str(draft_path.parent)
+            meta_data["draft_fold_path"] = str(draft_path)
+            meta_data["tm_draft_modified"] = int(time.time() * 1000000)
+            
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(meta_data, f, indent=4)
+
+        # 3. Inject Content safely into the valid schema
+        content_file = draft_path / "draft_content.json"
+        if content_file.exists():
+            with open(content_file, "r", encoding="utf-8") as f:
+                content_data = json.load(f)
+
+            # Reset materials arrays to clear template junk
+            content_data["materials"] = {
+                "videos": [],
+                "audios": [],
+                "canvases": [],
+                "speeds": []
+            }
+
+            video_segments = []
+            audio_segments = []
+            current_time_us = 0
+
+            # Process Videos
+            for clip in parsed_data:
+                clip_id = generate_capcut_id()
+                canvas_id = generate_capcut_id()
+                speed_id = generate_capcut_id()
+                
+                duration_us = int(clip["duration"] * 1000000)
+                file_path_str = str(clip["path"].resolve())
+                
+                # Add Video Material with UI Dimensions
+                content_data["materials"]["videos"].append({
+                    "id": clip_id,
+                    "type": "video",
+                    "path": file_path_str,
+                    "duration": duration_us,
+                    "material_name": clip["path"].name,
+                    "width": 1920,  # FIX: Gives the UI a physical bounding box width
+                    "height": 1080, # FIX: Gives the UI a physical bounding box height
+                    "volume": 1.0 
+                })
+                
+                # Add Canvas
+                content_data["materials"]["canvases"].append({
+                    "id": canvas_id,
+                    "type": "canvas_color",
+                    "color": "",
+                    "blur": 0.0,
+                    "album_image": "",
+                    "image": "",
+                    "image_id": "",
+                    "image_name": "",
+                    "source_platform": 0,
+                    "team_id": "",
+                    "material_name": file_path_str
+                })
+
+                # Add Speed
+                content_data["materials"]["speeds"].append({
+                    "id": speed_id,
+                    "type": "speed",
+                    "mode": 0,
+                    "speed": 1.0,
+                    "curve_speed": None,
+                    "material_name": file_path_str
+                })
+                
+                # Add Video Segment with spatial UI transforms
+                video_segments.append({
+                    "id": generate_capcut_id(),
+                    "material_id": clip_id,
+                    "source_timerange": {"start": 0, "duration": duration_us},
+                    "target_timerange": {"start": current_time_us, "duration": duration_us},
+                    "speed": 1.0,
+                    "volume": 1.0, 
+                    "visible": True, # FIX: Forces standard visibility logic
+                    "clip": {        # FIX: Tells CapCut how to let the user drag/scale the clip natively
+                        "alpha": 1.0,
+                        "flip": {"horizontal": False, "vertical": False},
+                        "rotation": 0.0,
+                        "scale": {"x": 1.0, "y": 1.0},
+                        "transform": {"x": 0.0, "y": 0.0}
+                    },
+                    "extra_material_refs": [canvas_id, speed_id]
+                })
+                current_time_us += duration_us
+
+            # Process Master Audio
+            audio_id = generate_capcut_id()
+            
+            audio_duration_us = int(get_audio_duration(audio_path) * 1000000)
+            audio_path_str = str(audio_path.resolve())
+            
+            # Add Audio Material
+            content_data["materials"]["audios"].append({
+                "id": audio_id,
+                "type": "audio",
+                "path": audio_path_str,
+                "duration": audio_duration_us,
+                "material_name": audio_path.name,
+                "volume": 1.0
+            })
+            
+            # Add Audio Segment with spatial UI transforms
+            audio_segments.append({
+                "id": generate_capcut_id(),
+                "material_id": audio_id,
+                "source_timerange": {"start": 0, "duration": audio_duration_us},
+                "target_timerange": {"start": 0, "duration": audio_duration_us},
+                "speed": 1.0,
+                "volume": 1.0,
+                "visible": True,
+                "clip": {
+                    "alpha": 1.0,
+                    "flip": {"horizontal": False, "vertical": False},
+                    "rotation": 0.0,
+                    "scale": {"x": 1.0, "y": 1.0},
+                    "transform": {"x": 0.0, "y": 0.0}
+                },
+                "extra_material_refs": []  
+            })
+
+            content_data["tracks"] = [
+                {
+                    "attribute": 0,
+                    "flag": 0,
+                    "id": generate_capcut_id(), 
+                    "is_default_name": True,
+                    "name": "",
+                    "segments": video_segments,
+                    "type": "video"
+                },
+                {
+                    "attribute": 0,
+                    "flag": 0,
+                    "id": generate_capcut_id(), 
+                    "is_default_name": True,
+                    "name": "",
+                    "segments": audio_segments,
+                    "type": "audio"
+                }
+            ]
+            
+            content_data["duration"] = max(current_time_us, audio_duration_us)
+
+            # Save the payload
+            with open(content_file, "w", encoding="utf-8") as f:
+                json.dump(content_data, f, indent=4)
+
+        print(f"  [+] Golden Template successfully hijacked for: {project_name} (Using Golden UIDs)")
+        print(f"  [SUCCESS] Open CapCut Desktop to verify your fully working draft!")
+        
+    except Exception as e:
+        print(f"  [!] Golden Template Injection Failed: {e}")
+
+def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, variant_tag: str = "", enable_capcut: bool = False, enable_ffmpeg: bool = True):
+    """Assembles a single complete video file from a target directory."""
     audio_path = project_dir / "audio.wav"
     temp_dir = project_dir / f"temp_video_clips_{variant_tag}"
     channel_name = project_dir.parent.name.lower()
@@ -121,7 +323,6 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
     tag_suffix = f"_{variant_tag}" if variant_tag else ""
     base_video_name = f"video_{timestamp}{tag_suffix}"
 
-    # Parse media files
     if media_mode == "video":
         media_files = [f for f in target_folder.iterdir() if f.suffix.lower() in ['.mp4', '.mov']]
     else:
@@ -150,6 +351,27 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
     parsed_data.sort(key=lambda x: x["time"])
     total_audio_time = get_audio_duration(audio_path)
 
+    print(f"\n--- PROCESSING: {target_folder.name.upper()} ---")
+    print(f"[Engine] Media Mode: {media_mode.upper()}")
+    print(f"[Engine] Audio Duration: {total_audio_time:.2f} seconds")
+
+    # =========================================================
+    # FAST OPERATION FIRST: Instantly generate the CapCut Draft
+    # =========================================================
+    if enable_capcut:
+        export_capcut_draft(parsed_data, project_dir, audio_path)
+
+    if not enable_ffmpeg:
+        print("\n[Engine] FFmpeg rendering bypassed as requested. Factory pipeline complete!")
+        return
+
+    # =========================================================
+    # SLOW OPERATION: FFmpeg rendering frame-by-frame
+    # =========================================================
+    if not FFMPEG_EXE.exists():
+        print(f"\n[!] ERROR: FFmpeg not found at {FFMPEG_EXE}")
+        sys.exit(1)
+
     if temp_dir.exists():
         shutil.rmtree(temp_dir)
     temp_dir.mkdir(exist_ok=True)
@@ -170,10 +392,6 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
     blueprint_lines = []
     is_raw_mode = any(keyword in channel_name for keyword in ["huh", "tech", "doodle", "stick"])
     
-    print(f"\n--- PROCESSING: {target_folder.name.upper()} ---")
-    print(f"[Engine] Media Mode: {media_mode.upper()}")
-    print(f"[Engine] Audio Duration: {total_audio_time:.2f} seconds")
-
     last_motion = ""
     incoming_transition = "hard_cut" 
     
@@ -271,13 +489,12 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
 
     shutil.rmtree(temp_dir)
 
-def build_video(project_dir: Path, media_mode: str = "image"):
+def build_video(project_dir: Path, media_mode: str = "image", enable_capcut: bool = False, enable_ffmpeg: bool = True):
     upscale_dir = project_dir / "3_upscaled"
     if not upscale_dir.exists():
         print("\n[!] ERROR: '3_upscaled' folder is missing. Check your workspace.")
         return
 
-    # Look for variant folders
     variant_folders = sorted([d for d in upscale_dir.iterdir() if d.is_dir() and d.name.startswith("variant_")])
 
     if variant_folders:
@@ -291,18 +508,15 @@ def build_video(project_dir: Path, media_mode: str = "image"):
         curated_dir = upscale_dir / "curated_master"
         curated_dir.mkdir(exist_ok=True)
 
-        # Grab all the filenames from the first available variant folder to iterate through
         base_files = sorted([f.name for f in variant_folders[0].iterdir() if f.is_file()])
 
         for clip_name in base_files:
-            # Skip if we already curated this clip (useful if you stop and resume)
             if (curated_dir / clip_name).exists():
                 continue
 
             print(f"\n[Scene] {clip_name}")
             valid_choices = []
             
-            # Check which variants actually have this file
             for i in range(1, 5):
                 if (upscale_dir / f"variant_{i}" / clip_name).exists():
                     valid_choices.append(str(i))
@@ -311,25 +525,21 @@ def build_video(project_dir: Path, media_mode: str = "image"):
                 print(f"  -> No variants found. Skipping.")
                 continue
 
-            # Force the user to pick a valid number
             choice = ""
             while choice not in valid_choices:
                 choice = input(f"Which variant is best? ({'/'.join(valid_choices)}): ").strip()
 
-            # Copy the winner to the curated folder
             src_file = upscale_dir / f"variant_{choice}" / clip_name
             shutil.copy2(src_file, curated_dir / clip_name)
             print(f"  [✓] Kept Variant {choice}")
 
         print("\n[System] Curation complete! Assembling your final masterpiece...")
-        
-        # Build the final video using ONLY the hand-picked clips
-        build_single_video(project_dir, media_mode, curated_dir, variant_tag="DIRECTORS_CUT")
+        build_single_video(project_dir, media_mode, curated_dir, variant_tag="DIRECTORS_CUT", enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
     else:
-        # Fallback if there are no variants, just render what's in 3_upscaled
-        build_single_video(project_dir, media_mode, upscale_dir)
+        build_single_video(project_dir, media_mode, upscale_dir, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
 
-    print(f"\n[SUCCESS] Factory Pipeline Complete!")
+    if enable_ffmpeg:
+        print(f"\n[SUCCESS] Factory Pipeline Complete!")
 
 def main():
     base_dir = Path(__file__).resolve().parent.parent
@@ -339,10 +549,26 @@ def main():
     print("2. Video Mode (Pre-rendered Vibes AI clips)")
     m_choice = input("Select Media Type (1 or 2): ").strip()
     
+    print("\n=== OUTPUT PIPELINE SELECTION ===")
+    print("1. FFmpeg Master Render Only (DEFAULT)")
+    print("2. CapCut Draft Injection Only")
+    print("3. BOTH (FFmpeg Render + CapCut Draft)")
+    p_choice = input("Select Output Pipeline (1, 2, or 3) [Press Enter for 1]: ").strip()
+    
     media_mode = "video" if m_choice == '2' else "image"
     
+    enable_ffmpeg = True
+    enable_capcut = False
+    
+    if p_choice == '2':
+        enable_ffmpeg = False
+        enable_capcut = True
+    elif p_choice == '3':
+        enable_ffmpeg = True
+        enable_capcut = True
+    
     project_dir = get_project_workspace(base_dir)
-    build_video(project_dir, media_mode)
+    build_video(project_dir, media_mode, enable_capcut, enable_ffmpeg)
 
 if __name__ == "__main__":
     main()
