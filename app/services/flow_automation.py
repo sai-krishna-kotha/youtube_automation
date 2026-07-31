@@ -15,7 +15,6 @@ class GoogleFlowScraper:
         self.base_dir = base_dir
         
         # --- ACCOUNT CONFIGURATION ---
-        # Updated to match the new clean 'session_1', 'session_2' structure
         self.account_order = [
             "session_1",
             "session_2",
@@ -36,7 +35,6 @@ class GoogleFlowScraper:
         else:
             self.session_directories = valid_sessions
 
-        # Default fallback (overridden dynamically during generate_images)
         self.session_dir = self.session_directories[0] if self.session_directories else None
 
         # --- FLOW CONFIGURATION ---
@@ -46,14 +44,9 @@ class GoogleFlowScraper:
         self.DOWNLOAD_DELAY = 1 
         
         # --- ⚙️ MASTER TOGGLE FOR IMAGE CHAINING ⚙️ ---
-        # Set to True: Uploads previous image as a reference for consistency.
-        # Set to False: Skips upload, runs faster, generates purely from text.
         self.ENABLE_IMAGE_CHAINING = False 
         self.GENERATE_TIMEOUT = 120000 if self.ENABLE_IMAGE_CHAINING else 80000 
-        # Default prefix for the VERY FIRST image in a sequence (or when chaining is OFF)
         self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features(eyes, mouth) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
-        
-        # Chained prefix for images 2 through X (Strict environment control)
         self.CHAINED_PREFIX = "Maintain the exact character design, art style, and color palette from the attached reference image. Change the action, pose, and background strictly according to the prompt below. Ensure clear facial features:\n\n"
 
         self.PROMPT_BOX_SELECTOR = 'div[data-slate-editor="true"][role="textbox"]'
@@ -66,7 +59,6 @@ class GoogleFlowScraper:
             status = "[Exists]" if (self.base_dir / d).exists() else "[Missing]"
             print(f" - {d} {status}")
             
-        # Updated prompt text
         new_name = input("\nEnter folder name to setup/login (e.g., session_1): ").strip()
         if not new_name:
             print("Aborted.")
@@ -120,7 +112,6 @@ class GoogleFlowScraper:
             print("[Scraper] Image Chaining is OFF (High Speed Mode)")
         
         with sync_playwright() as p:
-            # --- THE AUTO-DETECT LOAD BALANCER ---
             context = None
             active_session_dir = None
             
@@ -166,7 +157,6 @@ class GoogleFlowScraper:
             page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
             time.sleep(3)
 
-            # --- SMART SIGN-IN CHECK ---
             print("  -> Checking for 'Sign in' landing page...")
             try:
                 sign_in_btn = page.locator('text="Sign in"').first
@@ -188,11 +178,15 @@ class GoogleFlowScraper:
                 pass
 
             line_idx = 0 
-            previous_image_path = None # The crucial tracker for image chaining
+            previous_image_path = None 
             
             while line_idx < len(lines):
                 line = lines[line_idx]
-                match = re.search(r"\[([\d_]+)-([\d_]+)\]\s*(.*)", line)
+                
+                # --- THE BUG FIX: STRICT ANCHORED REGEX ---
+                # ^ forces it to only match at the very start of the line.
+                # \s* makes it forgiving of accidental spaces.
+                match = re.match(r"^\[\s*([\d_]+)\s*-\s*([\d_]+)\s*\]\s*(.*)", line)
                 if not match:
                     line_idx += 1
                     continue
@@ -201,10 +195,9 @@ class GoogleFlowScraper:
                 file_name = f"[{start_s}-{end_s}]_image.png"
                 output_path = output_dir / file_name
 
-                # SMART RESUME: Skip existing files but save their path for the next iteration
                 if output_path.exists():
                     print(f"\n[{line_idx+1}/{len(lines)}] SKIPPING: {file_name} already exists.")
-                    previous_image_path = output_path # Lock the path in memory
+                    previous_image_path = output_path 
                     line_idx += 1
                     continue
 
@@ -213,33 +206,28 @@ class GoogleFlowScraper:
                 
                 for attempt in range(self.MAX_RETRIES):
                     try:
-                        # 1. Clear old prompt and UI state immediately before starting
                         clear_btn = page.locator('button:has(i:text-is("close"))').first
                         if clear_btn.is_visible(timeout=3000):
                             clear_btn.click()
                             time.sleep(1.0)
 
-                        # 2. UPLOAD PREVIOUS IMAGE & SET DYNAMIC PREFIX (Only if TOGGLED ON)
                         dynamic_prefix = self.PROMPT_PREFIX
                         
                         if self.ENABLE_IMAGE_CHAINING and previous_image_path and previous_image_path.exists():
                             try:
-                                # 1. CLICK THE "+" (add_2) BUTTON FIRST TO OPEN THE MEDIA TRAY
                                 plus_btn = page.locator('button:has(i:text-is("add_2"))').first
                                 if plus_btn.is_visible(timeout=5000):
                                     plus_btn.click()
-                                    time.sleep(1.5) # Wait for the UI tray to animate open
+                                    time.sleep(1.5) 
 
-                                # 2. NOW INJECT THE FILE
                                 page.set_input_files('input[type="file"]', str(previous_image_path), timeout=10000)
                                 print(f"  -> Uploaded reference image: {previous_image_path.name}")
                                 
-                                # 3. SMART WAIT WATCHDOG: Check for Success OR Server Error
                                 add_prompt_btn = page.locator('button:has-text("Add to Prompt")').first
                                 error_toast = page.locator('text="Something went wrong loading your media"').first
                                 
                                 button_found = False
-                                for _ in range(20): # Max 20 seconds wait
+                                for _ in range(20): 
                                     if error_toast.is_visible():
                                         raise Exception("Google Flow server rejected the media upload (Canvas/Network error).")
                                     
@@ -252,24 +240,19 @@ class GoogleFlowScraper:
                                 if not button_found:
                                     raise Exception("Timed out waiting for 'Add to Prompt' button.")
 
-                                # 4. PROCEED WITH SUCCESS
                                 add_prompt_btn.click()
-                                time.sleep(2.0) # Give the UI a moment to lock the image into the prompt box
+                                time.sleep(2.0) 
                                 
                                 dynamic_prefix = self.CHAINED_PREFIX
                                 
                             except Exception as e:
                                 print(f"  [Warning] Image chain broken for this clip. Proceeding blindly: {e}")
-                                # Close the broken media tray or error toast so it doesn't block the prompt box
                                 page.keyboard.press("Escape")
                                 time.sleep(1.0)
                                 dynamic_prefix = self.PROMPT_PREFIX
 
-                        # 3. Snapshot Baseline AFTER the reference image is added!
-                        # This prevents the script from downloading the reference image.
                         baseline_srcs = page.evaluate("() => Array.from(document.querySelectorAll('img')).map(i => i.src)")
 
-                        # 4. Inject Prompt Safely
                         box = page.locator(self.PROMPT_BOX_SELECTOR).first
                         box.wait_for(state="visible", timeout=45000)
                         box.fill("")
@@ -288,7 +271,6 @@ class GoogleFlowScraper:
                         page.keyboard.press("Space")
                         time.sleep(1)
 
-                        # 5. Generate
                         try:
                             btn = page.locator(self.GENERATE_BTN_SELECTOR).first
                             btn.click(timeout=5000)
@@ -298,7 +280,6 @@ class GoogleFlowScraper:
                             
                         print(f"  -> Prompt submitted. Waiting for NEW image...")
 
-                        # 6. Wait for Render
                         js_wait_for_new = """(baseline) => {
                             const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
                                 i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
@@ -311,7 +292,6 @@ class GoogleFlowScraper:
                         print(f"  -> Image rendered! Waiting {self.DOWNLOAD_DELAY}s for data to finalize...")
                         time.sleep(self.DOWNLOAD_DELAY)
 
-                        # 7. Extract
                         js_extract_src = """(baseline) => {
                             const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
                                 i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
@@ -357,11 +337,10 @@ class GoogleFlowScraper:
                                 extracted = True
 
                         if extracted:
-                            # 8. STRICT VERIFICATION
                             if output_path.exists():
                                 print(f"  [✓] Verified on disk securely: {output_path.name}")
                                 success = True
-                                previous_image_path = output_path # Lock the successful image in memory for the next loop!
+                                previous_image_path = output_path 
                                 break
                             else:
                                 raise Exception("Data extracted but file failed to write to disk.")
