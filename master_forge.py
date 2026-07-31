@@ -357,11 +357,28 @@ def main():
         if ans == '1':
             run_phase3 = True
             
-    # --- NEW: TIMELINE ENGINE OUTPUT SELECTION ---
+    # --- NEW: EXPLICIT MEDIA TYPE & OUTPUT SELECTION ---
     enable_ffmpeg = True
     enable_capcut = False
+    media_mode_sel = "hybrid"
     
     if run_phase4:
+        print("\n" + "-"*40)
+        print("   SELECT MEDIA TYPE (PHASE 4)")
+        print("-" * 40)
+        print("  1. Image Mode (Upscaled static images)")
+        print("  2. Video Mode (Pre-rendered Vibes AI clips)")
+        print("  3. Hybrid Mode (Mixed Static Images + Vibes AI Videos - DEFAULT)")
+        
+        m_choice = input("\nSelect Media Type (1, 2, or 3) [Press Enter for 3]: ").strip()
+        
+        if m_choice == '1':
+            media_mode_sel = "image"
+        elif m_choice == '2':
+            media_mode_sel = "video"
+        else:
+            media_mode_sel = "hybrid"
+
         print("\n" + "-"*40)
         print("   SELECT OUTPUT PIPELINE (PHASE 4)")
         print("-" * 40)
@@ -674,7 +691,7 @@ def main():
         
         # 1. Generate Animation Prompts
         llm = GeminiClient()
-        prompt_service = VibesPromptService(llm_client=llm, output_dir=current_run_dir)
+        prompt_service = VibesPromptService(llm_client=llm, output_dir=current_run_dir, master_prompts_dir=master_prompts_dir)
         animation_prompts_file = prompt_service.generate_animation_prompts(
             transcription_json_path=transcription_json,
             static_prompts_path=static_prompts_file
@@ -772,9 +789,9 @@ def main():
             p4_choice = '1'
             generate_video = '1'
             
-            # SMART BYPASS: If we ran Vibes AI, we skip static image upscaling entirely
-            if run_phase3 or (up_dir.exists() and any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir())):
-                print("\n[System] Vibes AI Video variants detected in upscale folder. Bypassing static image processing (Watermark/Upscale/Rename)...")
+            # SMART BYPASS: Skip static image upscaling if we are working with pre-rendered variants
+            if media_mode_sel in ["video", "hybrid"] and (run_phase3 or (up_dir.exists() and any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir()))):
+                print("\n[System] Pre-rendered variants detected for Video/Hybrid mode. Bypassing static image upscaling...")
                 p4_choice = '5' # Jump straight to Assembly Engine!
         
         if p4_choice in ['1', '2']:
@@ -805,9 +822,30 @@ def main():
             if generate_video == '1':
                 print("\n[Engine] Assets processed. Handing off to Cinematic Timeline Engine...")
                 
-                # Determine media mode intelligently for the engine based on folder contents
-                media_mode_override = "video" if any(d.name.startswith("variant_") for d in up_dir.iterdir() if d.is_dir()) else "image"
-                m3.build_video(current_run_dir, media_mode=media_mode_override, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
+                # Verify that the required files actually exist in the up_dir based on user's manual selection
+                has_images = False
+                has_videos = False
+                if up_dir.exists():
+                    for root, dirs, files in os.walk(up_dir):
+                        for f in files:
+                            ext = f.lower().split('.')[-1]
+                            if ext in ['png', 'jpg', 'jpeg']:
+                                has_images = True
+                            elif ext in ['mp4', 'mov']:
+                                has_videos = True
+                
+                # Safety checks to gracefully catch empty/missing folders instead of crashing FFmpeg
+                if media_mode_sel == "video" and not has_videos:
+                    print(f"\n[!] ERROR: You selected 'Video Mode', but no video files (.mp4/.mov) were found in '{up_dir.name}'.")
+                    print("  -> Skipping timeline assembly. Please run Vibes AI (Phase 3) first!")
+                elif media_mode_sel == "image" and not has_images:
+                    print(f"\n[!] ERROR: You selected 'Image Mode', but no image files (.png/.jpg) were found in '{up_dir.name}'.")
+                    print("  -> Skipping timeline assembly. Please ensure Phase 2/Upscaler ran successfully.")
+                elif media_mode_sel == "hybrid" and not (has_images or has_videos):
+                    print(f"\n[!] ERROR: You selected 'Hybrid Mode', but no media files were found in '{up_dir.name}'.")
+                    print("  -> Skipping timeline assembly.")
+                else:
+                    m3.build_video(current_run_dir, media_mode=media_mode_sel, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
             else:
                 print("\n[!] Video generation skipped. Your assets are ready !!")
                 
