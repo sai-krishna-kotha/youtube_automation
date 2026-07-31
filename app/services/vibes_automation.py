@@ -2,6 +2,7 @@ import sys
 import time
 import re
 import base64
+import shutil
 from pathlib import Path
 
 try:
@@ -144,6 +145,21 @@ class VibesAIAutomator:
                 image_filename = f"[{timestamp_str}]_image.png"
                 image_path = image_dir / image_filename
 
+                # --- HYBRID OPTIMIZATION: INSTANT STATIC BYPASS ---
+                if anim_prompt.strip().upper() == "STATIC":
+                    all_images_exist = all((v_dir / image_filename).exists() for v_dir in variant_dirs)
+                    if all_images_exist:
+                        print(f"\n[Checkpoint] Clip [{timestamp_str}] (STATIC) already injected. Skipping.")
+                    else:
+                        print(f"\n[Vibes Worker] Clip [{timestamp_str}] marked as STATIC by AI Director. Bypassing render API...")
+                        for v_dir in variant_dirs:
+                            dest = v_dir / image_filename
+                            if not dest.exists() and image_path.exists():
+                                shutil.copy2(image_path, dest)
+                    clip_idx += 1
+                    continue
+                # --------------------------------------------------
+
                 all_exist = all((v_dir / base_filename).exists() for v_dir in variant_dirs)
                 if all_exist:
                     print(f"\n[Checkpoint] Clip [{timestamp_str}] fully generated. Skipping.")
@@ -171,7 +187,6 @@ class VibesAIAutomator:
                             project_created = False 
                             clips_in_current_project = 0
 
-                        # STEP 1: PROJECT CREATION LOGIC
                         if not project_created:
                             print("  -> Step 1: Navigating to Dashboard & Creating clean project instance...")
                             page.goto("about:blank") 
@@ -186,16 +201,14 @@ class VibesAIAutomator:
                             create_new_btn.click()
                             time.sleep(4) 
                             project_created = True
-                            known_video_srcs = set() # Reset memory bank on fresh project
+                            known_video_srcs = set() 
 
-                        # STEP 2: CLEAN PREVIOUS START FRAME
                         remove_btn = page.locator('button[aria-label="Remove start frame"], button[aria-label="Remove image"]')
                         if remove_btn.count() > 0 and remove_btn.first.is_visible():
                             print("  -> Step 2: Removing existing start frame from workspace...")
                             remove_btn.first.click()
                             time.sleep(1)
 
-                        # STEP 3: REVEAL INLINE BUTTON
                         add_start_frame_btn = page.get_by_role("button", name="Add start frame").first
                         if not add_start_frame_btn.is_visible():
                             print("  -> Step 3: Expanding 'Start, end frame' toggle to reveal inline button...")
@@ -203,12 +216,10 @@ class VibesAIAutomator:
                             expand_ui_btn.click()
                             add_start_frame_btn.wait_for(state="visible", timeout=5000)
 
-                        # STEP 4: CLICK TO OPEN UPLOAD MODAL
                         print("  -> Step 4: Clicking 'Add start frame' to open upload modal...")
                         add_start_frame_btn.click()
                         time.sleep(2)
 
-                        # STEP 5: UPLOAD FILE WITH RETRY LOGIC
                         print("  -> Step 5: Uploading image...")
                         modal_upload_btn = page.locator('button:has-text("Upload")').filter(has_text="Upload").last
                         modal_upload_btn.wait_for(state="visible", timeout=10000)
@@ -222,10 +233,8 @@ class VibesAIAutomator:
                         if confirm_upload_btn.is_visible():
                             confirm_upload_btn.click()
                             
-                        # --- ROBUST UPLOAD CHECKER ---
                         for _ in range(4): 
                             time.sleep(3)
-                            # ADDED .first TO PREVENT STRICT MODE VIOLATIONS
                             if page.locator('text="Something went wrong!"').first.is_visible():
                                 raise MetaAIErrorException("Meta AI crashed during the upload phase.")
 
@@ -238,7 +247,6 @@ class VibesAIAutomator:
                                 break
                         time.sleep(7) 
 
-                        # STEP 6: SELECT RECENT IMAGE
                         print("  -> Step 6: Selecting recently uploaded image from the active gallery...")
                         gallery_img = page.locator(f'img[alt="{image_path.name}"]').first 
                         gallery_img.wait_for(state="visible", timeout=20000)
@@ -256,12 +264,10 @@ class VibesAIAutomator:
                         if not is_selected:
                             raise Exception("Could not select image in gallery.")
 
-                        # STEP 7: ADD TO VIDEO
                         print("  -> Step 7: Binding image to video...")
                         add_to_video_btn.click(force=True) 
                         time.sleep(2)
 
-                        # STEP 8: PROMPT INSERTION
                         print("  -> Step 8: Entering animation prompt...")
                         prompt_box = page.locator('div[data-lexical-editor="true"]').first
                         prompt_box.wait_for(state="visible", timeout=10000)
@@ -281,9 +287,28 @@ class VibesAIAutomator:
                                 print("\n  [🚨] DETECTED RATE LIMIT TOAST MESSAGE!")
                                 raise RateLimitException("Rate limit hit on current account.")
 
-                        # STEP 9: GENERATE & RATE LIMIT POLLING
                         print("  -> Step 9: Clicking Generate and polling DOM for completely new video URLs...")
                         generate_btn = page.locator('button[aria-label="Generate"]').first
+                        time.sleep(5)
+                        # --- NEW: STEP 3 - CONFIGURE ADVANCED SETTINGS (720p) ---
+                        print("  -> Step 3: Expanding 'Advanced' settings to select 720p resolution...")
+                        advanced_btn = page.locator('button[title="Advanced settings"]').first
+                        
+                        if advanced_btn.is_visible():
+                            advanced_btn.click()
+                            time.sleep(1)
+                            
+                            btn_720p = page.locator('button:has-text("720p")').first
+                            if btn_720p.is_visible():
+                                btn_720p.click()
+                                time.sleep(1)
+                            
+                            # Force a click on the absolute top-left of the webpage body to close the menu
+                            page.locator("body").click(position={"x": 5, "y": 5}, force=True)
+                            time.sleep(1)
+                        else:
+                            print("  [!] Warning: 'Advanced settings' button not found. Skipping 720p configuration.")
+                        time.sleep(5)
                         generate_btn.click()
                         
                         start_wait = time.time()
@@ -302,7 +327,6 @@ class VibesAIAutomator:
                                 print(f"\n  [+] Success! Found {len(new_vid_srcs)} completely new video generations.")
                                 break 
                                 
-                            # ADDED .first TO PREVENT STRICT MODE VIOLATIONS
                             if page.locator('text="Something went wrong!"').first.is_visible():
                                 raise MetaAIErrorException("Meta AI threw a generic 'Something went wrong!' error.")
 
@@ -332,9 +356,6 @@ class VibesAIAutomator:
                         print("\n  -> Render complete! Downloading new assets...")
                         time.sleep(5) 
 
-                        # =======================================================
-                        # STEP 10: DIRECT URL DOWNLOAD (MEMORY BANK METHOD)
-                        # =======================================================
                         new_urls = list(new_vid_srcs)
                         
                         if len(new_urls) < 4:
@@ -387,7 +408,6 @@ class VibesAIAutomator:
                         success = True
                         break 
                         
-                    # --- META AI GENERIC ERROR SCREEN HANDLER ---
                     except MetaAIErrorException as me:
                         print(f"\n  [🚨] {me}")
                         print("  [System] Forcing a fresh project creation via Vibes.ai home...")
@@ -395,7 +415,6 @@ class VibesAIAutomator:
                         clips_in_current_project = 0
                         continue
 
-                    # --- ACCOUNT SWITCHING CATCHER ---
                     except RateLimitException:
                         print(f"  [System] Initiating Account Swap...")
                         try: browser.close()
@@ -415,7 +434,6 @@ class VibesAIAutomator:
 
                     except PlaywrightError as pe:
                         try:
-                            # ADDED .first TO PREVENT STRICT MODE VIOLATIONS
                             if not page.is_closed() and page.locator('text="Something went wrong!"').first.is_visible():
                                 print("\n  [🚨] Meta AI Error Screen detected behind the timeout!")
                                 print("  [System] Forcing a fresh project creation via Vibes.ai home...")
@@ -434,7 +452,6 @@ class VibesAIAutomator:
 
                     except Exception as e:
                         try:
-                            # ADDED .first TO PREVENT STRICT MODE VIOLATIONS
                             if not page.is_closed() and page.locator('text="Something went wrong!"').first.is_visible():
                                 print("\n  [🚨] Meta AI Error Screen detected!")
                                 print("  [System] Forcing a fresh project creation via Vibes.ai home...")
