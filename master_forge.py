@@ -361,6 +361,7 @@ def main():
     enable_ffmpeg = True
     enable_capcut = False
     media_mode_sel = "hybrid"
+    bulk_choice = "M"  # Default to manual unless overridden below
     
     if run_phase4:
         print("\n" + "-"*40)
@@ -394,6 +395,19 @@ def main():
         elif p_choice == '3':
             enable_ffmpeg = True
             enable_capcut = True
+            
+        # --- NEW: BULK VARIANT SELECTION FOR ZERO-TOUCH RUNS ---
+        if media_mode_sel in ["video", "hybrid"]:
+            print("\n" + "-"*40)
+            print("   SELECT DIRECTOR'S CUT MODE")
+            print("-" * 40)
+            if manual_mode or phase_choice == '6':
+                bulk_choice = input("Enter variant (1-4) to Auto-Apply to all scenes, OR press 'M' for Manual: ").strip().upper()
+                if bulk_choice not in ["1", "2", "3", "4", "M"]: 
+                    bulk_choice = "M"
+            else:
+                print("[System] Fully Automated Mode detected. Auto-defaulting to Variant 1 for Zero-Touch flow.")
+                bulk_choice = "1"
 
     # ==============================================================
     # PHASE 1: ASSET CREATION (Core Script, Audio, Prompts)
@@ -856,7 +870,7 @@ def main():
                     print(f"\n[!] ERROR: You selected 'Hybrid Mode', but no media files were found in '{up_dir.name}'.")
                     print("  -> Skipping timeline assembly.")
                 else:
-                    m3.build_video(current_run_dir, media_mode=media_mode_sel, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
+                    m3.build_video(current_run_dir, media_mode=media_mode_sel, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg, bulk_choice=bulk_choice)
             else:
                 print("\n[!] Video generation skipped. Your assets are ready !!")
                 
