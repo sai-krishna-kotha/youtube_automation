@@ -10,7 +10,7 @@ from typing import List
 # ==========================================
 class AnimationShot(BaseModel):
     timestamp: str = Field(description="The exact timestamp block provided, e.g., '0_00-4_50'")
-    is_video: bool = Field(description="True if this scene requires motion (ALWAYS True for first 60s). False if a static image is enough.")
+    is_video: bool = Field(description="True if the system flag says MUST BE VIDEO. False if the flag says MUST BE STATIC.")
     motion_prompt: str = Field(description="The cinematic motion prompt. If is_video is False, just write the exact word 'STATIC'.")
 
 class AnimationBatchResponse(BaseModel):
@@ -21,15 +21,13 @@ class AnimationBatchResponse(BaseModel):
 # ==========================================
 SLEEP_TIME = 10
 
-def _time_str_to_seconds(time_str: str) -> int:
-    """Converts a timestamp like '1_15' into 75 seconds for logic checks."""
+def _time_str_to_seconds(time_str: str) -> float:
+    """Converts a timestamp like '3_51' into 3.51 seconds for precise logic checks."""
     try:
-        parts = time_str.split('_')
-        if len(parts) == 2:
-            return int(parts[0]) * 60 + int(parts[1])
+        # Replace the underscore with a decimal point and convert to float
+        return float(time_str.replace('_', '.'))
     except Exception:
-        pass
-    return 0
+        return 0.0
 
 class VibesPromptService:
     def __init__(self, llm_client, output_dir: Path, master_prompts_dir: Path):
@@ -37,6 +35,14 @@ class VibesPromptService:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.master_prompts_dir = master_prompts_dir
+        
+        # ==========================================
+        # 🎛️ HYBRID VIDEO CONTROL PANEL 🎛️
+        # ==========================================
+        self.RETENTION_SECONDS = 40.0   # Mandatory video window at start of video
+        self.MIN_VIDEO_DURATION = 1.5   # Any clip shorter than this is ALWAYS a static image
+        self.TARGET_VIDEO_RATIO = 0.35  # Target 35% of total clips as video
+        # ==========================================
 
     def generate_animation_prompts(self, transcription_json_path: Path, static_prompts_path: Path):
         print("\n--- VIBES AI: GENERATING BATCH-WISE HYBRID PROMPTS ---")
@@ -59,18 +65,60 @@ class VibesPromptService:
             print("[FATAL] Static prompts file missing.")
             return None
             
+        # Parse all static prompts and calculate exact durations
         parsed_static_prompts = []
         with open(static_prompts_path, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
-                match = re.match(r'\[([\d_]+-[\d_]+)\]\s*(.*)', line)
+                match = re.match(r'\[([\d_]+)-([\d_]+)\]\s*(.*)', line)
                 if match:
+                    start_s = _time_str_to_seconds(match.group(1))
+                    end_s = _time_str_to_seconds(match.group(2))
+                    dur = end_s - start_s
+                    
                     parsed_static_prompts.append({
-                        "timestamp": match.group(1),
-                        "prompt": match.group(2)
+                        "timestamp": f"{match.group(1)}-{match.group(2)}",
+                        "prompt": match.group(3),
+                        "start_s": start_s,
+                        "duration": dur,
+                        "is_video": False, # Default
+                        "locked": False    # Track if rule is firmly applied
                     })
+
+        # ==========================================
+        # HYBRID DISTRIBUTION MATH
+        # ==========================================
+        total_clips = len(parsed_static_prompts)
+        videos_assigned = 0
+
+        # Pass 1: Apply Strict Rules (Short Clip rule vs Retention Rule)
+        for scene in parsed_static_prompts:
+            if scene["duration"] < self.MIN_VIDEO_DURATION:
+                scene["is_video"] = False
+                scene["locked"] = True
+            elif scene["start_s"] < self.RETENTION_SECONDS:
+                scene["is_video"] = True
+                scene["locked"] = True
+                videos_assigned += 1
+
+        # Pass 2: Fill remaining quota with the LONGEST available clips
+        target_video_count = int(total_clips * self.TARGET_VIDEO_RATIO)
+        remaining_quota = max(0, target_video_count - videos_assigned)
+
+        if remaining_quota > 0:
+            # Grab all unlocked clips, sort by duration descending
+            eligible_clips = [s for s in parsed_static_prompts if not s["locked"]]
+            eligible_clips.sort(key=lambda x: x["duration"], reverse=True)
+            
+            for scene in eligible_clips[:remaining_quota]:
+                scene["is_video"] = True
+                scene["locked"] = True
+                videos_assigned += 1
+
+        print(f"[System] Hybrid Math: Total Clips={total_clips} | Target Videos={target_video_count} | Actual Assigned={videos_assigned}")
+        # ==========================================
 
         checkpoint_path = self.output_dir / "animation_prompts_checkpoint.json"
         completed_batches = {}
@@ -86,7 +134,6 @@ class VibesPromptService:
         if completed_batches:
             print(f"[Checkpoint] Found {len(completed_batches)} previously completed animation batches. Resuming...")
 
-        # --- LOAD MASTER PROMPT FILE ---
         prompt_file = self.master_prompts_dir / "vibes_hybrid_director.md"
         if not prompt_file.exists():
             print(f"[FATAL] Master prompt missing at: {prompt_file}")
@@ -94,7 +141,6 @@ class VibesPromptService:
         
         with open(prompt_file, 'r', encoding='utf-8') as pf:
             base_director_prompt = pf.read()
-        # -------------------------------
 
         static_idx = 0  
         
@@ -112,29 +158,24 @@ class VibesPromptService:
             batch_scenes_context = ""
             for i in range(expected_shot_count):
                 if static_idx < len(parsed_static_prompts):
+                    scene_data = parsed_static_prompts[static_idx]
                     audio_text = batch["segments"][i].get("text", "")
-                    img_time = parsed_static_prompts[static_idx]["timestamp"]
-                    img_prompt = parsed_static_prompts[static_idx]["prompt"]
                     
-                    start_time_str = img_time.split('-')[0]
-                    start_sec = _time_str_to_seconds(start_time_str)
-                    
-                    if start_sec < 40:
-                        rule_flag = "[CRITICAL: MUST BE VIDEO (First 60s Retention)]"
+                    if scene_data["is_video"]:
+                        rule_flag = "[CRITICAL: MUST BE VIDEO (Write a 15-30 word motion prompt)]"
                     else:
-                        rule_flag = "[OPTIONAL: AI DECIDES - Video OR Static Image]"
+                        rule_flag = "[CRITICAL: MUST BE STATIC (Return exactly the word 'STATIC')]"
                     
                     batch_scenes_context += (
-                        f"Scene {i+1} (Timestamp: {img_time}) {rule_flag}:\n"
+                        f"Scene {i+1} (Timestamp: {scene_data['timestamp']}, Duration: {scene_data['duration']:.2f}s) {rule_flag}:\n"
                         f"  Spoken Audio: \"{audio_text}\"\n"
-                        f"  Static Image Look: \"{img_prompt}\"\n\n"
+                        f"  Static Image Look: \"{scene_data['prompt']}\"\n\n"
                     )
                     static_idx += 1
                 else:
                     print("[!] Warning: Ran out of static prompts before audio segments finished!")
                     break
             
-            # --- INJECT CONTEXT INTO THE MARKDOWN PROMPT ---
             user_prompt = base_director_prompt.replace("{batch_scenes_context}", batch_scenes_context)
 
             while True:
@@ -171,10 +212,20 @@ class VibesPromptService:
             txt_output_path = self.output_dir / "animation_prompts.txt"
             
             with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
-                for shot in all_shots_so_far:
-                    # Write exact file format for the Automator to parse
-                    final_prompt = shot.motion_prompt if shot.is_video else "STATIC"
-                    txt_file.write(f"[{shot.timestamp}] {final_prompt}\n")
+                for i, shot in enumerate(all_shots_so_far):
+                    
+                    # --- THE IRONCLAD OVERRIDE ---
+                    # We strip the LLM's power and strictly enforce our Python math logic!
+                    if i < len(parsed_static_prompts):
+                        actual_scene = parsed_static_prompts[i]
+                        
+                        if actual_scene["is_video"]:
+                            # If LLM wrote "STATIC" by mistake, give a default prompt to prevent crash
+                            final_prompt = shot.motion_prompt if shot.motion_prompt.upper() != "STATIC" else "A very slow push-in camera movement."
+                        else:
+                            final_prompt = "STATIC"
+                            
+                        txt_file.write(f"[{actual_scene['timestamp']}] {final_prompt}\n")
                     
             print(f"  -> Incremental save: animation_prompts.txt updated.")
 
