@@ -119,7 +119,7 @@ class VibesPromptService:
                     start_time_str = img_time.split('-')[0]
                     start_sec = _time_str_to_seconds(start_time_str)
                     
-                    if start_sec < 60:
+                    if start_sec < 40:
                         rule_flag = "[CRITICAL: MUST BE VIDEO (First 60s Retention)]"
                     else:
                         rule_flag = "[OPTIONAL: AI DECIDES - Video OR Static Image]"
