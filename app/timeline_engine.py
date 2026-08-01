@@ -488,7 +488,7 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
 
     shutil.rmtree(temp_dir)
 
-def build_video(project_dir: Path, media_mode: str = "hybrid", enable_capcut: bool = False, enable_ffmpeg: bool = True):
+def build_video(project_dir: Path, media_mode: str = "hybrid", enable_capcut: bool = False, enable_ffmpeg: bool = True, bulk_choice: str = "M"):
     upscale_dir = project_dir / "3_upscaled"
     if not upscale_dir.exists():
         print("\n[!] ERROR: '3_upscaled' folder is missing. Check your workspace.")
@@ -500,37 +500,55 @@ def build_video(project_dir: Path, media_mode: str = "hybrid", enable_capcut: bo
         print("\n" + "="*50)
         print("   🎬 INTERACTIVE DIRECTOR'S CUT")
         print("="*50)
-        print("Go check your variant folders! For each scene,")
-        print("enter the number of the variant you want to keep.")
-        print("Your chosen clips will be copied to 'curated_master'.\n")
-
+        
         curated_dir = upscale_dir / "curated_master"
         curated_dir.mkdir(exist_ok=True)
-
         base_files = sorted([f.name for f in variant_folders[0].iterdir() if f.is_file()])
 
-        for clip_name in base_files:
-            if (curated_dir / clip_name).exists():
-                continue
+        # Check if a valid bulk choice was passed in, if not, ask the user[cite: 7]
+        if bulk_choice not in ["1", "2", "3", "4", "M"]:
+            print("How would you like to select your variants?")
+            while bulk_choice not in ["1", "2", "3", "4", "M"]:
+                bulk_choice = input("Enter a number (1-4) to Auto-Apply to ALL scenes, OR press 'M' for Manual Selection: ").strip().upper()
 
-            print(f"\n[Scene] {clip_name}")
-            valid_choices = []
-            
-            for i in range(1, 5):
-                if (upscale_dir / f"variant_{i}" / clip_name).exists():
-                    valid_choices.append(str(i))
-            
-            if not valid_choices:
-                print(f"  -> No variants found. Skipping.")
-                continue
+        if bulk_choice in ["1", "2", "3", "4"]:
+            print(f"\n[System] Bulk Auto-Applying Variant {bulk_choice} to all scenes...")
+            for clip_name in base_files:
+                if (curated_dir / clip_name).exists():
+                    continue
+                
+                choice = bulk_choice
+                if not (upscale_dir / f"variant_{choice}" / clip_name).exists():
+                    print(f"  [!] Variant {choice} missing for {clip_name}. Falling back to Variant 1.")
+                    choice = "1"
+                    
+                src_file = upscale_dir / f"variant_{choice}" / clip_name
+                shutil.copy2(src_file, curated_dir / clip_name)
+                print(f"  [Bulk] Copied Variant {choice} -> {clip_name}")
+        else:
+            print("\n[System] Initiating Manual Clip-by-Clip Selection...")
+            for clip_name in base_files:
+                if (curated_dir / clip_name).exists():
+                    continue
 
-            choice = ""
-            while choice not in valid_choices:
-                choice = input(f"Which variant is best? ({'/'.join(valid_choices)}): ").strip()
+                print(f"\n[Scene] {clip_name}")
+                valid_choices = []
+                
+                for i in range(1, 5):
+                    if (upscale_dir / f"variant_{i}" / clip_name).exists():
+                        valid_choices.append(str(i))
+                
+                if not valid_choices:
+                    print(f"  -> No variants found. Skipping.")
+                    continue
 
-            src_file = upscale_dir / f"variant_{choice}" / clip_name
-            shutil.copy2(src_file, curated_dir / clip_name)
-            print(f"  [✓] Kept Variant {choice}")
+                choice = ""
+                while choice not in valid_choices:
+                    choice = input(f"Which variant is best? ({'/'.join(valid_choices)}): ").strip()
+
+                src_file = upscale_dir / f"variant_{choice}" / clip_name
+                shutil.copy2(src_file, curated_dir / clip_name)
+                print(f"  [✓] Kept Variant {choice}")
 
         print("\n[System] Curation complete! Assembling your final masterpiece...")
         build_single_video(project_dir, media_mode, curated_dir, variant_tag="DIRECTORS_CUT", enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
@@ -571,9 +589,16 @@ def main():
     elif p_choice == '3':
         enable_ffmpeg = True
         enable_capcut = True
-    
+        
     project_dir = get_project_workspace(base_dir)
-    build_video(project_dir, media_mode, enable_capcut, enable_ffmpeg)
+    
+    # Catching manual run inputs[cite: 7]
+    print("\n=== DIRECTOR'S CUT MODE ===")
+    bulk_choice = input("Enter variant (1-4) to Auto-Apply, OR press 'M' for Manual [Press Enter for M]: ").strip().upper()
+    if bulk_choice not in ["1", "2", "3", "4"]:
+        bulk_choice = "M"
+        
+    build_video(project_dir, media_mode, enable_capcut, enable_ffmpeg, bulk_choice)
 
 if __name__ == "__main__":
     main()
