@@ -313,7 +313,7 @@ def main():
     print("  2. MANUAL MODE (Step-by-step with pauses)")
     print("  3. Run Phase 1 Only (Build Core Assets)")
     print("  4. Run Phase 2 Only (Generate Static Images)")
-    print("  5. Run Phase 3 Only (Vibes AI Video Generation) [OPTIONAL]")
+    print("  5. Run Phase 3 Only (AI Video Generation) [OPTIONAL]")
     print("  6. Run Phase 4 Only (Final Render & Assembly)")
     print("  7. Setup Gemini Authentication (Run Once)")
     print("  8. Setup Google Flow Authentication (Run Once)")
@@ -353,7 +353,7 @@ def main():
     manual_mode = phase_choice == '2'
 
     if phase_choice == '1':
-        ans = input("\n[?] Do you want to include optional Vibes AI Video generation? (1: Yes, 0: No): ").strip()
+        ans = input("\n[?] Do you want to include optional AI Video generation? (1: Yes, 0: No): ").strip()
         if ans == '1':
             run_phase3 = True
             
@@ -367,8 +367,8 @@ def main():
         print("   SELECT MEDIA TYPE (PHASE 4)")
         print("-" * 40)
         print("  1. Image Mode (Upscaled static images)")
-        print("  2. Video Mode (Pre-rendered Vibes AI clips)")
-        print("  3. Hybrid Mode (Mixed Static Images + Vibes AI Videos - DEFAULT)")
+        print("  2. Video Mode (Pre-rendered AI clips)")
+        print("  3. Hybrid Mode (Mixed Static Images + AI Videos - DEFAULT)")
         
         m_choice = input("\nSelect Media Type (1, 2, or 3) [Press Enter for 3]: ").strip()
         
@@ -654,23 +654,25 @@ def main():
             sys.exit(0) 
             
         if run_phase3 and manual_mode:
-            ans = input("\nProceed to Phase 3 (Vibes AI Video Generation)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
+            ans = input("\nProceed to Phase 3 (AI Video Generation)? (1: Yes, 0: Exit, 2: Switch to Auto): ").strip()
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
     # ==============================================================
-    # PHASE 3: VIBES AI VIDEO GENERATION [OPTIONAL]
+    # PHASE 3: AI VIDEO GENERATION [OPTIONAL]
     # ==============================================================
     if run_phase3:
         print("\n" + "="*50)
-        print("   PHASE 3: VIBES AI VIDEO GENERATION")
+        print("   PHASE 3: AI VIDEO GENERATION")
         print("="*50)
+        print("  1. Vibes AI (Default)")
+        print("  2. Google Flow")
+        v_tool_choice = input("\nSelect Video Generation Tool (1/2) [Press Enter for 1]: ").strip()
+        video_engine = "flow" if v_tool_choice == '2' else "vibes"
         
         from app.services.vibes_prompt_service import VibesPromptService
-        from app.services.vibes_automation import VibesAIAutomator
         from app.services.llm_client import GeminiClient
         
-        # --- THE FIX: Ignore system config files and specifically grab the transcription batch file ---
         existing_jsons = [f for f in current_run_dir.glob("*.json") if f.name not in [
             "run_config.json", 
             "metadata.json", 
@@ -689,9 +691,13 @@ def main():
         raw_images_dir = current_run_dir / "1_raw_images"
         upscale_dir = current_run_dir / "3_upscaled" # Target directory for videos
         
-        # 1. Generate Animation Prompts
+        # 1. Generate Hybrid Animation Prompts
         llm = GeminiClient()
-        prompt_service = VibesPromptService(llm_client=llm, output_dir=current_run_dir, master_prompts_dir=master_prompts_dir)
+        prompt_service = VibesPromptService(
+            llm_client=llm, 
+            output_dir=current_run_dir, 
+            master_prompts_dir=master_prompts_dir
+        )
         animation_prompts_file = prompt_service.generate_animation_prompts(
             transcription_json_path=transcription_json,
             static_prompts_path=static_prompts_file
@@ -702,23 +708,28 @@ def main():
             pack_system_data(current_run_dir)
             sys.exit(1)
             
-        # 2. Initialize Vibes Automator
-        print("\n[Engine] Initializing Vibes AI Automation...")
-        vibes_scraper = VibesAIAutomator(base_dir=sessions_dir / "vibes")
+        # 2. Route to Selected Video Automator
+        if video_engine == "flow":
+            print("\n[Engine] Initializing Google Flow Video Automation...")
+            from app.services.google_flow_video_automation import GoogleFlowVideoAutomator
+            video_scraper = GoogleFlowVideoAutomator(base_dir=sessions_dir / "flow")
+        else:
+            print("\n[Engine] Initializing Vibes AI Automation...")
+            from app.services.vibes_automation import VibesAIAutomator
+            video_scraper = VibesAIAutomator(base_dir=sessions_dir / "vibes")
         
-        # --- THE AUTO-AUTH INTERCEPT ---
-        if not vibes_scraper.session_dirs[0].exists():
-            print(f"\n[!] Vibes AI Authentication missing! Pausing pipeline to authenticate...")
-            vibes_scraper.setup_session()
+        # Auto-auth check
+        if not video_scraper.session_dirs or not video_scraper.session_dirs[0].exists():
+            print(f"\n[!] {video_engine.upper()} Authentication missing! Pausing pipeline to authenticate...")
+            video_scraper.setup_session()
             
-            auth_proceed = input("\nAuthentication complete. Do you want to proceed with video generation? (1: Yes, 0: Exit): ").strip()
+            auth_proceed = input("\nAuthentication complete. Proceed with video generation? (1: Yes, 0: Exit): ").strip()
             if auth_proceed != '1':
                 pack_system_data(current_run_dir)
                 sys.exit(0)
-        # --------------------------------
         
         # 3. Generate Videos
-        vibes_scraper.generate_animations(
+        video_scraper.generate_animations(
             prompts_file=animation_prompts_file,
             image_dir=raw_images_dir,
             output_dir=upscale_dir
@@ -837,7 +848,7 @@ def main():
                 # Safety checks to gracefully catch empty/missing folders instead of crashing FFmpeg
                 if media_mode_sel == "video" and not has_videos:
                     print(f"\n[!] ERROR: You selected 'Video Mode', but no video files (.mp4/.mov) were found in '{up_dir.name}'.")
-                    print("  -> Skipping timeline assembly. Please run Vibes AI (Phase 3) first!")
+                    print("  -> Skipping timeline assembly. Please run AI Video generation (Phase 3) first!")
                 elif media_mode_sel == "image" and not has_images:
                     print(f"\n[!] ERROR: You selected 'Image Mode', but no image files (.png/.jpg) were found in '{up_dir.name}'.")
                     print("  -> Skipping timeline assembly. Please ensure Phase 2/Upscaler ran successfully.")

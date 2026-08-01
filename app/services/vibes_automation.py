@@ -17,6 +17,9 @@ class RateLimitException(Exception):
 class MetaAIErrorException(Exception):
     pass
 
+class BrowserRelaunchException(Exception):
+    pass
+
 class VibesAIAutomator:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
@@ -37,17 +40,35 @@ class VibesAIAutomator:
         self.MAX_RETRIES = 3
         self.HEADLESS_MODE = False
         self.PROJECT_CLIP_THRESHOLD = 1 
-        self.MIN_FAIL_TOAST_TIME = 10 
+        self.MIN_FAIL_TOAST_TIME = 30 
+        
+        # --- NEW: GENERATION TIMEOUT THRESHOLD (IN SECONDS) ---
+        self.GENERATION_TIMEOUT = 120  # Max wait time for video render before hard reset
 
     def _handle_unexpected_login(self, page):
+        """Checks for random validation/login popups and clicks them to recover."""
         try:
             login_btn = page.locator('button:has-text("Log in"), button:has-text("Login"), button:has-text("Sign in")').first
-            if login_btn.is_visible(timeout=3000):
-                print("  [System] Found a Login button. Attempting to click...")
+            if login_btn.is_visible(timeout=2000):
+                print("\n  [System] Session Validation / Login button detected! Clicking to recover...")
                 login_btn.click()
-                time.sleep(3)
+                time.sleep(5) # Give it time to route back to home
+                return True
         except Exception:
             pass 
+        return False
+
+    def _check_error_toasts(self, page):
+        """Scans DOM for error/failure toast messages."""
+        try:
+            error_toast = page.locator('text=/error|something went wrong|failed to create|try again|unable to/i').first
+            if error_toast.is_visible(timeout=1000):
+                toast_text = error_toast.inner_text()
+                print(f"\n  [!] Error Toast Detected: '{toast_text}'")
+                return True
+        except Exception:
+            pass
+        return False
 
     def setup_session(self):
         print("\n--- VIBES AI MULTI-ACCOUNT SETUP ---")
@@ -175,9 +196,12 @@ class VibesAIAutomator:
                 success = False
                 swapped_account = False  
                 time.sleep(5)
+                
                 if page.locator('text=/rate limit|limit reached|too many|quota/i').first.is_visible():
                     print("\n  [🚨] DETECTED RATE LIMIT TOAST MESSAGE!")
+                    time.sleep(5)
                     raise RateLimitException("Rate limit hit on current account.")
+                    
                 for attempt in range(self.MAX_RETRIES):
                     try:
                         if page.is_closed():
@@ -187,19 +211,40 @@ class VibesAIAutomator:
                             project_created = False 
                             clips_in_current_project = 0
 
+                        # --- STEP 1: CREATE NEW PROJECT WITH VERIFICATION ---
                         if not project_created:
                             print("  -> Step 1: Navigating to Dashboard & Creating clean project instance...")
                             page.goto("about:blank") 
                             time.sleep(1)
                             
                             page.goto(self.VIBES_URL, wait_until="domcontentloaded", timeout=60000)
-                            time.sleep(3)
-                            self._handle_unexpected_login(page)
+                            time.sleep(6)
+                            
+                            # THE FIX: If login causes navigation, force a sync before continuing
+                            if self._handle_unexpected_login(page):
+                                print("  [System] Re-syncing dashboard after login navigation...")
+                                page.goto(self.VIBES_URL, wait_until="domcontentloaded", timeout=60000)
+                                time.sleep(6)
                             
                             create_new_btn = page.locator('button:has-text("Create new")').first
-                            create_new_btn.wait_for(state="visible", timeout=35000)
-                            create_new_btn.click()
-                            time.sleep(4) 
+                            try:
+                                create_new_btn.wait_for(state="visible", timeout=35000)
+                                create_new_btn.click()
+                                time.sleep(3)
+                                
+                                # THE FIX: Explicitly verify we entered the workspace!
+                                workspace_check = page.locator('button[data-analytics-id="creation_gallery.start_end_frame_selection_click"], button:has-text("Add start frame"), div[data-lexical-editor="true"]').first
+                                workspace_check.wait_for(state="visible", timeout=15000)
+                                
+                            except Exception as proj_err:
+                                if self._check_error_toasts(page):
+                                    raise BrowserRelaunchException("Toast error detected during project creation!")
+                                raise Exception(f"Failed to enter project workspace: {proj_err}")
+
+                            # Post-click toast check
+                            if self._check_error_toasts(page):
+                                raise BrowserRelaunchException("Toast error detected after entering workspace!")
+
                             project_created = True
                             known_video_srcs = set() 
 
@@ -222,7 +267,12 @@ class VibesAIAutomator:
 
                         print("  -> Step 5: Uploading image...")
                         modal_upload_btn = page.locator('button:has-text("Upload")').filter(has_text="Upload").last
-                        modal_upload_btn.wait_for(state="visible", timeout=10000)
+                        
+                        try:
+                            modal_upload_btn.wait_for(state="visible", timeout=12000)
+                        except Exception as e:
+                            raise BrowserRelaunchException("UI Glitch: Upload button completely missing from modal!")
+
                         modal_upload_btn.click()
                         time.sleep(1)
                         
@@ -249,19 +299,25 @@ class VibesAIAutomator:
 
                         print("  -> Step 6: Selecting recently uploaded image from the active gallery...")
                         gallery_img = page.locator(f'img[alt="{image_path.name}"]').first 
-                        gallery_img.wait_for(state="visible", timeout=20000)
+                        
+                        try:
+                            gallery_img.wait_for(state="visible", timeout=20000)
+                        except Exception as e:
+                            print("  [!] Timeout waiting for image to load in gallery.")
+                            raise e 
                         
                         add_to_video_btn = page.locator('button:has-text("Add to video")').first
                         
                         is_selected = False
                         for click_attempt in range(5):
                             gallery_img.click(force=True)
-                            time.sleep(1.5)
+                            time.sleep(2)
                             if not add_to_video_btn.is_disabled():
                                 is_selected = True
                                 break
 
                         if not is_selected:
+                            print("  [!] Could not select image in gallery.")
                             raise Exception("Could not select image in gallery.")
 
                         print("  -> Step 7: Binding image to video...")
@@ -287,36 +343,61 @@ class VibesAIAutomator:
                                 print("\n  [🚨] DETECTED RATE LIMIT TOAST MESSAGE!")
                                 raise RateLimitException("Rate limit hit on current account.")
 
-                        print("  -> Step 9: Clicking Generate and polling DOM for completely new video URLs...")
+                        print("  -> Step 9: Configuring 720p and generating...")
+
                         generate_btn = page.locator('button[aria-label="Generate"]').first
-                        time.sleep(5)
-                        # --- NEW: STEP 3 - CONFIGURE ADVANCED SETTINGS (720p) ---
-                        print("  -> Step 3: Expanding 'Advanced' settings to select 720p resolution...")
                         advanced_btn = page.locator('button[title="Advanced settings"]').first
-                        
+
                         if advanced_btn.is_visible():
                             advanced_btn.click()
-                            time.sleep(1)
-                            
-                            btn_720p = page.locator('button:has-text("720p")').first
+                            page.wait_for_timeout(500)
+
+                            btn_720p = page.get_by_role("button", name="720p")
+
                             if btn_720p.is_visible():
                                 btn_720p.click()
-                                time.sleep(1)
-                            
-                            # Force a click on the absolute top-left of the webpage body to close the menu
-                            page.locator("body").click(position={"x": 5, "y": 5}, force=True)
-                            time.sleep(1)
-                        else:
-                            print("  [!] Warning: 'Advanced settings' button not found. Skipping 720p configuration.")
-                        time.sleep(5)
+                                page.wait_for_timeout(300)
+
+                            page.evaluate("""
+                            () => {
+                                const backdrop = document.querySelector(
+                                    'div[style*="position: fixed"][style*="inset: 0px"][style*="pointer-events: auto"]'
+                                );
+
+                                if (backdrop) {
+                                    backdrop.dispatchEvent(new PointerEvent("pointerdown", {
+                                        bubbles: true,
+                                        cancelable: true,
+                                        composed: true,
+                                        pointerType: "mouse",
+                                        clientX: 10,
+                                        clientY: 10,
+                                        button: 0,
+                                        buttons: 1,
+                                        isPrimary: true
+                                    }));
+                                }
+                            }
+                            """)
+
+                            page.wait_for_timeout(500)
+
+                        generate_btn.wait_for(state="visible")
                         generate_btn.click()
-                        
                         start_wait = time.time()
                         generation_failed = False
                         new_vid_srcs = set()
                         early_fail_ignored = False
-                        
+
+                        # --- STEP 9: POLLING WITH TIMEOUT THRESHOLD ---
                         while True:
+                            elapsed = time.time() - start_wait
+
+                            # THRESHOLD CHECK: Force reset if rendering takes longer than self.GENERATION_TIMEOUT (120s)
+                            if elapsed > self.GENERATION_TIMEOUT:
+                                print(f"\n  [🚨] TIMEOUT THRESHOLD EXCEEDED ({int(elapsed)}s > {self.GENERATION_TIMEOUT}s)!")
+                                raise BrowserRelaunchException(f"Generation parsing hung for {int(elapsed)}s. Nuke browser and retry.")
+
                             try:
                                 current_vid_srcs = set(page.evaluate(js_get_vids))
                                 new_vid_srcs = current_vid_srcs - known_video_srcs
@@ -334,8 +415,10 @@ class VibesAIAutomator:
                                 print("\n  [🚨] DETECTED RATE LIMIT TOAST MESSAGE!")
                                 raise RateLimitException("Rate limit hit on current account.")
 
+                            if page.locator('button:has-text("Log in"), button:has-text("Login")').first.is_visible():
+                                raise Exception("Login validation triggered during generation polling.")
+
                             if page.locator('text="Generation failed"').first.is_visible():
-                                elapsed = time.time() - start_wait
                                 if elapsed > self.MIN_FAIL_TOAST_TIME:
                                     generation_failed = True
                                     print(f"\n  [!] 'Generation failed' toast validated after {int(elapsed)}s. Aborting.")
@@ -344,7 +427,7 @@ class VibesAIAutomator:
                                     print(f"\n  [?] 'Generation failed' toast caught early ({int(elapsed)}s). Ignoring meta tweak...")
                                     early_fail_ignored = True 
                                 
-                            sys.stdout.write(f"\r  -> Polling DOM... Found {len(new_vid_srcs)}/4 required videos. Elapsed: {int(time.time() - start_wait)}s")
+                            sys.stdout.write(f"\r  -> Polling DOM... Found {len(new_vid_srcs)}/4 required videos. Elapsed: {int(elapsed)}s / {self.GENERATION_TIMEOUT}s max")
                             sys.stdout.flush()
                             time.sleep(3) 
                         
@@ -408,6 +491,17 @@ class VibesAIAutomator:
                         success = True
                         break 
                         
+                    except BrowserRelaunchException as bre:
+                        print(f"\n  [🚨] {bre}")
+                        print("  [System] Tearing down corrupted browser instance and relaunching...")
+                        try: browser.close()
+                        except: pass
+                        
+                        browser, page = launch_browser(self.session_dirs[self.current_session_index])
+                        project_created = False
+                        clips_in_current_project = 0
+                        continue
+
                     except MetaAIErrorException as me:
                         print(f"\n  [🚨] {me}")
                         print("  [System] Forcing a fresh project creation via Vibes.ai home...")
@@ -433,6 +527,17 @@ class VibesAIAutomator:
                         break 
 
                     except PlaywrightError as pe:
+                        if self._handle_unexpected_login(page):
+                            project_created = False
+                            clips_in_current_project = 0
+                            continue
+
+                        try:
+                            print("  [System] Attempting Escape to clear any frozen modals...")
+                            page.keyboard.press("Escape")
+                            time.sleep(1.5)
+                        except: pass
+
                         try:
                             if not page.is_closed() and page.locator('text="Something went wrong!"').first.is_visible():
                                 print("\n  [🚨] Meta AI Error Screen detected behind the timeout!")
@@ -451,6 +556,17 @@ class VibesAIAutomator:
                         time.sleep(5)
 
                     except Exception as e:
+                        if self._handle_unexpected_login(page):
+                            project_created = False
+                            clips_in_current_project = 0
+                            continue
+
+                        try:
+                            print("  [System] Attempting Escape to clear any frozen modals...")
+                            page.keyboard.press("Escape")
+                            time.sleep(1.5)
+                        except: pass
+
                         try:
                             if not page.is_closed() and page.locator('text="Something went wrong!"').first.is_visible():
                                 print("\n  [🚨] Meta AI Error Screen detected!")
