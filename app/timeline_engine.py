@@ -18,6 +18,10 @@ from pydub import AudioSegment
 # Your exact path to the FFmpeg executable
 FFMPEG_EXE = Path("C:/Users/kotha/Downloads/important/ffmpeg/bin/ffmpeg.exe")
 AudioSegment.converter = str(FFMPEG_EXE)
+
+# --- NEW: SHORT VIDEO HANDLING ---
+# Options: "slomo" (stretches video to fit gap) OR "freeze" (holds last frame)
+VIDEO_EXTEND_MODE = "slomo" 
 # ==========================================
 
 def get_project_workspace(base_dir: Path) -> Path:
@@ -60,6 +64,16 @@ def get_audio_duration(wav_path: Path) -> float:
         frames = f.getnframes()
         rate = f.getframerate()
         return frames / float(rate)
+
+def get_video_duration(video_path: Path) -> float:
+    """Uses FFmpeg to extract the exact actual duration of a video file."""
+    cmd = f'"{FFMPEG_EXE}" -i "{video_path}"'
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    match = re.search(r"Duration:\s*(\d+):(\d+):(\d+\.\d+)", result.stderr)
+    if match:
+        h, m, s = match.groups()
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    return 0.0
 
 def get_smart_motion_style(last_style: str) -> str:
     """Breathing Camera: Alternates Zooms and Pans"""
@@ -422,10 +436,22 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
                 motion_filter = f"zoompan=z='1.08':d={total_frames}:x='max(0,(iw-iw/zoom)-0.4*on)':y='ih/2-(ih/zoom/2)':s=3840x2160:fps=30"
 
             vf_chain = f"scale=8000:4500,{motion_filter},noise=alls=2:allf=t"
-        elif not is_clip_video and is_raw_mode:
-            motion_style = "static"
-        else:
+            
+        elif is_clip_video:
             motion_style = "video_trim" 
+            actual_vid_dur = get_video_duration(m_path)
+            
+            # --- THE FIX: SMART SHORT VIDEO EXTENSION ---
+            if 0 < actual_vid_dur < duration:
+                if VIDEO_EXTEND_MODE == "slomo":
+                    stretch_factor = duration / actual_vid_dur
+                    vf_chain += f",setpts={stretch_factor}*PTS"
+                    motion_style = "video_slomo"
+                elif VIDEO_EXTEND_MODE == "freeze":
+                    vf_chain += ",tpad=stop_mode=clone:stop=-1"
+                    motion_style = "video_freeze"
+        else:
+            motion_style = "static"
 
         if not is_raw_mode:
             fade_duration = 0.3
@@ -505,7 +531,6 @@ def build_video(project_dir: Path, media_mode: str = "hybrid", enable_capcut: bo
         curated_dir.mkdir(exist_ok=True)
         base_files = sorted([f.name for f in variant_folders[0].iterdir() if f.is_file()])
 
-        # Check if a valid bulk choice was passed in, if not, ask the user[cite: 7]
         if bulk_choice not in ["1", "2", "3", "4", "M"]:
             print("How would you like to select your variants?")
             while bulk_choice not in ["1", "2", "3", "4", "M"]:
@@ -592,7 +617,6 @@ def main():
         
     project_dir = get_project_workspace(base_dir)
     
-    # Catching manual run inputs[cite: 7]
     print("\n=== DIRECTOR'S CUT MODE ===")
     bulk_choice = input("Enter variant (1-4) to Auto-Apply, OR press 'M' for Manual [Press Enter for M]: ").strip().upper()
     if bulk_choice not in ["1", "2", "3", "4"]:
