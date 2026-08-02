@@ -193,36 +193,36 @@ class PackagingService:
                 # DESCRIPTION
                 # --------------------------------------------------
                 f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("DESCRIPTION\n")
+                f.write("DESCRIPTION\n\n")
                 f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
                 f.write(f"{description_clean}\n\n")
 
                 # --------------------------------------------------
                 # PRIMARY SEO KEYWORDS
                 # --------------------------------------------------
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("PRIMARY SEO KEYWORDS\n")
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write(", ".join(metadata_dict["seo_keywords"]["primary"]))
-                f.write("\n\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("SEO KEYWORDS:\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("\n".join(metadata_dict["seo_keywords"]["primary"][:len(metadata_dict["seo_keywords"]["primary"])//3]))
+                f.write("\n")
 
                 # --------------------------------------------------
                 # SECONDARY SEO KEYWORDS
                 # --------------------------------------------------
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("SECONDARY LONG-TAIL KEYWORDS\n")
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write(", ".join(metadata_dict["seo_keywords"]["secondary"]))
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write("SECONDARY LONG-TAIL KEYWORDS\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                f.write("\n".join(metadata_dict["seo_keywords"]["secondary"][:len(metadata_dict["seo_keywords"]["secondary"])//3]))
                 f.write("\n\n")
 
-                # --------------------------------------------------
-                # AUTOCOMPLETE
-                # --------------------------------------------------
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("YOUTUBE AUTOCOMPLETE KEYWORDS\n")
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write(", ".join(metadata_dict["seo_keywords"]["autocomplete"]))
-                f.write("\n\n")
+                # # --------------------------------------------------
+                # # AUTOCOMPLETE
+                # # --------------------------------------------------
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write("YOUTUBE AUTOCOMPLETE KEYWORDS\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write(", ".join(metadata_dict["seo_keywords"]["autocomplete"]))
+                # f.write("\n\n")
 
                 # --------------------------------------------------
                 # SEARCH QUESTIONS
@@ -231,7 +231,7 @@ class PackagingService:
                 f.write("COMMON SEARCH QUESTIONS\n")
                 f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
-                for q in metadata_dict["seo_keywords"]["questions"]:
+                for q in metadata_dict["seo_keywords"]["questions"][:len(metadata_dict["seo_keywords"]["questions"])//3]:
                     f.write(f"• {q}\n")
 
                 f.write("\n")
@@ -239,20 +239,20 @@ class PackagingService:
                 # --------------------------------------------------
                 # ENTITIES
                 # --------------------------------------------------
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("ENTITIES\n")
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write(", ".join(metadata_dict["seo_keywords"]["entities"]))
-                f.write("\n\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write("ENTITIES\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write("\n".join(metadata_dict["seo_keywords"]["entities"]))
+                # f.write("\n\n")
 
                 # --------------------------------------------------
                 # HASHTAGS
                 # --------------------------------------------------
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write("HASHTAGS\n")
-                f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-                f.write(" ".join(metadata_dict["hashtags"]))
-                f.write("\n\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write("HASHTAGS\n")
+                # f.write("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+                # f.write(" ".join(metadata_dict["hashtags"]))
+                # f.write("\n\n")
 
                 # --------------------------------------------------
                 # TAGS
