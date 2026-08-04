@@ -2,9 +2,11 @@ import sys
 import os
 import time
 import base64
-import re
 import shutil
 from pathlib import Path
+
+# --- NEW: Injecting Centralized Parser ---
+from app.utils.timeline_parser import TimelineParser
 
 try:
     from playwright.sync_api import sync_playwright, Error as PlaywrightError
@@ -26,7 +28,7 @@ class GoogleFlowVideoAutomator:
         else:
             self.session_dirs = [base_dir / "session_1"]
 
-        self.current_session_index = 0
+        self.current_session_index = 1
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
         self.HEADLESS_MODE = False
         self.MAX_RETRIES = 3
@@ -75,14 +77,20 @@ class GoogleFlowVideoAutomator:
             print(f"[System] Session '{new_name}' saved successfully!")
 
     def _parse_animation_prompts(self, prompt_file: Path):
+        """V2: Parses the animation prompts using TimelineParser for tag resilience."""
         clips = []
         with open(prompt_file, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'\[([\d_]+-[\d_]+)\]\s*(.*)', line.strip())
-                if match:
+                if not line.strip():
+                    continue
+                parsed_clip = TimelineParser.parse_prompt_line(line)
+                if parsed_clip:
                     clips.append({
-                        "timestamp": match.group(1),
-                        "prompt": match.group(2)
+                        "timestamp": f"{parsed_clip.start_str}-{parsed_clip.end_str}",
+                        "prompt": parsed_clip.content,
+                        "clip_type": parsed_clip.clip_type,
+                        "image_filename": parsed_clip.expected_filename,
+                        "video_filename": parsed_clip.expected_filename.replace("_image.png", "_clip.mp4")
                     })
         return clips
 
@@ -90,7 +98,7 @@ class GoogleFlowVideoAutomator:
         self.session_dirs = sorted(
             [d for d in self.base_dir.iterdir() if d.is_dir() and d.name.startswith("session_")],
             key=lambda x: x.name,
-            reverse=True
+            # reverse=True
         )
 
         if not self.session_dirs or not self.session_dirs[0].exists():
@@ -131,8 +139,9 @@ class GoogleFlowVideoAutomator:
                 timestamp_str = clip['timestamp']
                 anim_prompt = clip['prompt']
                 
-                base_filename = f"[{timestamp_str}]_clip.mp4"
-                image_filename = f"[{timestamp_str}]_image.png"
+                # --- V2 FILENAME MAPPING ---
+                base_filename = clip['video_filename']
+                image_filename = clip['image_filename']
                 image_path = image_dir / image_filename
 
                 # --- HYBRID OPTIMIZATION: INSTANT STATIC BYPASS ---
@@ -141,7 +150,8 @@ class GoogleFlowVideoAutomator:
                     if all_images_exist:
                         print(f"\n[Checkpoint] Clip [{timestamp_str}] (STATIC) already injected. Skipping.")
                     else:
-                        print(f"\n[Google Flow] Clip [{timestamp_str}] marked as STATIC by AI Director. Bypassing render API...")
+                        tag_msg = f"[{clip['clip_type']}] " if clip['clip_type'] != "DEFAULT" else ""
+                        print(f"\n[Google Flow] {tag_msg}Clip [{timestamp_str}] marked as STATIC by AI Director. Bypassing render API...")
                         for v_dir in variant_dirs:
                             dest = v_dir / image_filename
                             if not dest.exists() and image_path.exists():
