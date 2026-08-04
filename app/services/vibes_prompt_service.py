@@ -1,9 +1,11 @@
 import json
 import time
-import re
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List
+from typing import List, Dict, Any
+
+# --- NEW: Injecting Centralized Parser ---
+from app.utils.timeline_parser import TimelineParser
 
 # ==========================================
 # PYDANTIC SCHEMAS FOR STRICT LLM JSON
@@ -21,14 +23,6 @@ class AnimationBatchResponse(BaseModel):
 # ==========================================
 SLEEP_TIME = 10
 
-def _time_str_to_seconds(time_str: str) -> float:
-    """Converts a timestamp like '3_51' into 3.51 seconds for precise logic checks."""
-    try:
-        # Replace the underscore with a decimal point and convert to float
-        return float(time_str.replace('_', '.'))
-    except Exception:
-        return 0.0
-
 class VibesPromptService:
     def __init__(self, llm_client, output_dir: Path, master_prompts_dir: Path):
         self.llm = llm_client
@@ -44,8 +38,32 @@ class VibesPromptService:
         self.TARGET_VIDEO_RATIO = 0.35  # Target 35% of total clips as video
         # ==========================================
 
+    def _flatten_segments_to_cues(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        V2 Pre-Processor: Flattens Base Segments and nested B-Roll Overlays 
+        to match the 1:1 mapping of the static prompts file.
+        """
+        cues = []
+        for seg in segments:
+            cues.append({
+                "type": "BASE",
+                "start_time": seg.get("start", 0.0),
+                "text": seg.get("text", "")
+            })
+            
+            for b_roll in seg.get("b_roll_overlays", []):
+                cues.append({
+                    "type": "B-ROLL",
+                    "start_time": b_roll.get("appearance_time", 0.0),
+                    "text": b_roll.get("display_text", "")
+                })
+                
+        # Chronological sorting guarantees correct LLM interpretation
+        cues.sort(key=lambda x: x["start_time"])
+        return cues
+
     def generate_animation_prompts(self, transcription_json_path: Path, static_prompts_path: Path):
-        print("\n--- VIBES AI: GENERATING BATCH-WISE HYBRID PROMPTS ---")
+        print("\n--- VIBES AI: GENERATING BATCH-WISE HYBRID PROMPTS (V2 ARCHITECTURE) ---")
         
         if not transcription_json_path.exists():
             print("[FATAL] Transcription JSON missing. Cannot run context-aware batches.")
@@ -65,26 +83,23 @@ class VibesPromptService:
             print("[FATAL] Static prompts file missing.")
             return None
             
-        # Parse all static prompts and calculate exact durations
+        # Parse all static prompts using the V2 TimelineParser
         parsed_static_prompts = []
         with open(static_prompts_path, 'r', encoding='utf-8') as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                if not line.strip():
                     continue
-                match = re.match(r'\[([\d_]+)-([\d_]+)\]\s*(.*)', line)
-                if match:
-                    start_s = _time_str_to_seconds(match.group(1))
-                    end_s = _time_str_to_seconds(match.group(2))
-                    dur = end_s - start_s
-                    
+                parsed_clip = TimelineParser.parse_prompt_line(line)
+                if parsed_clip:
+                    is_broll = (parsed_clip.clip_type == "B-ROLL")
                     parsed_static_prompts.append({
-                        "timestamp": f"{match.group(1)}-{match.group(2)}",
-                        "prompt": match.group(3),
-                        "start_s": start_s,
-                        "duration": dur,
+                        "timestamp": f"{parsed_clip.start_str}-{parsed_clip.end_str}",
+                        "prompt": parsed_clip.content,
+                        "start_s": parsed_clip.start_sec,
+                        "duration": parsed_clip.duration,
+                        "clip_type": parsed_clip.clip_type,
                         "is_video": False, # Default
-                        "locked": False    # Track if rule is firmly applied
+                        "locked": is_broll # V2 LOCK: B-Rolls can NEVER be animated
                     })
 
         # ==========================================
@@ -95,6 +110,9 @@ class VibesPromptService:
 
         # Pass 1: Apply Strict Rules (Short Clip rule vs Retention Rule)
         for scene in parsed_static_prompts:
+            if scene["locked"]: 
+                continue # Skip B-Rolls, they remain static
+                
             if scene["duration"] < self.MIN_VIDEO_DURATION:
                 scene["is_video"] = False
                 scene["locked"] = True
@@ -103,12 +121,11 @@ class VibesPromptService:
                 scene["locked"] = True
                 videos_assigned += 1
 
-        # Pass 2: Fill remaining quota with the LONGEST available clips
+        # Pass 2: Fill remaining quota with the LONGEST available eligible clips
         target_video_count = int(total_clips * self.TARGET_VIDEO_RATIO)
         remaining_quota = max(0, target_video_count - videos_assigned)
 
         if remaining_quota > 0:
-            # Grab all unlocked clips, sort by duration descending
             eligible_clips = [s for s in parsed_static_prompts if not s["locked"]]
             eligible_clips.sort(key=lambda x: x["duration"], reverse=True)
             
@@ -146,20 +163,23 @@ class VibesPromptService:
         
         for idx, batch in enumerate(batches):
             batch_id_str = str(batch.get('batch_id', idx))
-            expected_shot_count = len(batch.get("segments", []))
+            
+            # --- V2 FLATTENING FOR LLM CONTEXT ---
+            flattened_cues = self._flatten_segments_to_cues(batch.get("segments", []))
+            expected_shot_count = len(flattened_cues)
             
             if batch_id_str in completed_batches:
                 print(f"\n[Checkpoint] Batch {batch_id_str} already processed. Skipping API call.")
                 static_idx += expected_shot_count
                 continue 
                 
-            print(f"\nProcessing Animation Batch {batch_id_str} of {total_batches} (Expecting {expected_shot_count} shots)...")
+            print(f"\nProcessing Animation Batch {batch_id_str} of {total_batches} (Expecting {expected_shot_count} shots [Base + B-Roll])...")
             
             batch_scenes_context = ""
             for i in range(expected_shot_count):
                 if static_idx < len(parsed_static_prompts):
                     scene_data = parsed_static_prompts[static_idx]
-                    audio_text = batch["segments"][i].get("text", "")
+                    audio_text = flattened_cues[i].get("text", "")
                     
                     if scene_data["is_video"]:
                         rule_flag = "[CRITICAL: MUST BE VIDEO (Write a 15-30 word motion prompt)]"
@@ -167,8 +187,8 @@ class VibesPromptService:
                         rule_flag = "[CRITICAL: MUST BE STATIC (Return exactly the word 'STATIC')]"
                     
                     batch_scenes_context += (
-                        f"Scene {i+1} (Timestamp: {scene_data['timestamp']}, Duration: {scene_data['duration']:.2f}s) {rule_flag}:\n"
-                        f"  Spoken Audio: \"{audio_text}\"\n"
+                        f"Scene {i+1} (Type: {scene_data['clip_type']}, Timestamp: {scene_data['timestamp']}, Duration: {scene_data['duration']:.2f}s) {rule_flag}:\n"
+                        f"  Spoken Audio / Text Overlay: \"{audio_text}\"\n"
                         f"  Static Image Look: \"{scene_data['prompt']}\"\n\n"
                     )
                     static_idx += 1
@@ -214,18 +234,17 @@ class VibesPromptService:
             with open(txt_output_path, 'w', encoding='utf-8') as txt_file:
                 for i, shot in enumerate(all_shots_so_far):
                     
-                    # --- THE IRONCLAD OVERRIDE ---
-                    # We strip the LLM's power and strictly enforce our Python math logic!
                     if i < len(parsed_static_prompts):
                         actual_scene = parsed_static_prompts[i]
                         
                         if actual_scene["is_video"]:
-                            # If LLM wrote "STATIC" by mistake, give a default prompt to prevent crash
                             final_prompt = shot.motion_prompt if shot.motion_prompt.upper() != "STATIC" else "A very slow push-in camera movement."
                         else:
                             final_prompt = "STATIC"
                             
-                        txt_file.write(f"[{actual_scene['timestamp']}] {final_prompt}\n")
+                        # Reconstruct the string perfectly mapped to V2 Tags
+                        tag_prefix = "" if actual_scene['clip_type'] == "DEFAULT" else f"[{actual_scene['clip_type']}] "
+                        txt_file.write(f"{tag_prefix}[{actual_scene['timestamp']}] {final_prompt}\n")
                     
             print(f"  -> Incremental save: animation_prompts.txt updated.")
 
