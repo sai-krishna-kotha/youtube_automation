@@ -1,15 +1,16 @@
 import sys
 import time
 import base64
-import re
 import random
 from pathlib import Path
+
+# --- NEW: Injecting Centralized Parser ---
+from app.utils.timeline_parser import TimelineParser
 
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
     pass
-
 
 class GeminiImageScraper:
     def __init__(self, base_dir: Path):
@@ -17,10 +18,10 @@ class GeminiImageScraper:
         
         # --- STRICT ACCOUNT PRIORITY LIST ---
         self.account_order = [
-            "gemini_session",
-            "gemini_session_pp",
-            "gemini_session_sm",
-            "gemini_session_jio",
+            "session_1",
+            "session_2",
+            "session_3",
+            "session_4",
         ]
         
         self.session_directories = [base_dir / name for name in self.account_order]
@@ -54,7 +55,7 @@ class GeminiImageScraper:
             print("Resetting context: Severing state to prevent bleed-over...")
             page.goto("https://gemini.google.com/", wait_until="domcontentloaded")
             page.wait_for_selector('div[role="textbox"]', timeout=15000)
-            time.sleep(2.5) # Giving a human-like pause after loading
+            time.sleep(2.5)
         except Exception as e:
             print(f"Warning: Failed to reset chat. Error: {e}")
 
@@ -121,7 +122,7 @@ class GeminiImageScraper:
             page = context.new_page()
             page.goto("https://gemini.google.com")
             
-            input("\n👉 Log in fully. Once you see the Gemini dashboard, press ENTER here...")
+            input("\n[✓] Log in fully. Once you see the Gemini dashboard, press ENTER here...")
             context.close()
             print(f"[System] Session '{new_name}' saved successfully!")
 
@@ -155,14 +156,17 @@ class GeminiImageScraper:
             line_idx = 0 
             while line_idx < len(lines):
                 line = lines[line_idx]
-                match = re.search(r"\[([\d_]+)-([\d_]+)\]\s*(.*)", line)
-                if not match:
+                
+                # --- V2 PARSER INJECTION ---
+                parsed_clip = TimelineParser.parse_prompt_line(line)
+                if not parsed_clip:
                     line_idx += 1
                     continue
                 
-                safe_start, safe_end, prompt = match.groups()
-                file_name = f"[{safe_start}-{safe_end}]_image.png"
+                prompt = parsed_clip.content
+                file_name = parsed_clip.expected_filename
                 output_path = output_dir / file_name
+                # ---------------------------
 
                 if output_path.exists():
                     print(f"\n[{line_idx+1}/{len(lines)}] SKIPPING: {file_name} already exists.")
@@ -239,7 +243,6 @@ class GeminiImageScraper:
                             print("  [Wait] Image detected. Giving it 10 seconds to fully render to prevent corruption...")
                             time.sleep(10.0)
                             
-                            # 4. HYBRID EXTRACTION (Network + Safe Canvas)
                             js_extract_src = """() => {
                                 const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
                                 const latestBlock = blocks[blocks.length - 1];
@@ -254,7 +257,6 @@ class GeminiImageScraper:
                             if img_src:
                                 success = False
                                 
-                                # Route A: Secure Network Fetch (Bypasses Canvas CORS for standard URLs)
                                 if img_src.startswith('http'):
                                     try:
                                         img_response = context.request.get(img_src)
@@ -262,9 +264,8 @@ class GeminiImageScraper:
                                             f.write(img_response.body())
                                         success = True
                                     except Exception as e:
-                                        pass # Fallback to Route B
+                                        pass
                                 
-                                # Route B: Canvas Pixel Extraction (For 'blob:' or 'data:' URLs where the network link is dead/revoked)
                                 if not success:
                                     js_canvas_extract = """() => {
                                         const blocks = document.querySelectorAll('message-content, [data-message-author-role="model"]');
