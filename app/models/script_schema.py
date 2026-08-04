@@ -1,8 +1,7 @@
 from pydantic import BaseModel, Field
-from typing import List
-from typing import Literal
+from typing import List, Literal, Optional
 
-location: Literal[
+location = Literal[
     "Opening",
     "Chapter 1",
     "Chapter 2",
@@ -26,11 +25,9 @@ class PreserveItem(BaseModel):
     location: str
     reason: str
 
-
 class RetentionMapItem(BaseModel):
     section: str
     score: float
-
 
 class ReviewResponse(BaseModel):
     score: float
@@ -43,11 +40,38 @@ class ReviewResponse(BaseModel):
     preserve: List[PreserveItem]
     editor_strategy: str
     
+# -----------------------------
+# VISUAL V2 SCHEMAS (NEW)
+# -----------------------------
+
+class BRollOverlay(BaseModel):
+    visual_type: Literal["TEXT_ONLY", "MIXED"] = Field(..., description="The type of overlay, usually TEXT_ONLY for kinetic typography.")
+    display_text: str = Field(..., description="The exact text to display on screen. Up to MAX_DISPLAY_WORDS.")
+    highlight_word: Optional[str] = Field(None, description="The single most important word to highlight in a different color.")
+    trigger_word_start: float = Field(..., description="The exact WhisperX timestamp when the target word is spoken.")
+    appearance_time: float = Field(..., description="The time the text pops on screen (calculated automatically as trigger_word_start - 500ms).")
+    sfx_trigger: Optional[float] = Field(None, description="The timestamp to trigger the sound effect (matches appearance_time).")
+    entrance_animation: Optional[str] = Field("pop_in", description="The entrance animation style (e.g., pop_in, slide_up).")
+    duration: Optional[float] = Field(1.0, description="How long the text overlay stays on screen.")
+
 class AudioSegment(BaseModel):
     segment_id: int
     start: float
-    end: float
+    # end: float -> REMOVED IN V2 to prevent downstream hallucination in the Image Prompt generator.
     text: str
+    
+    visual_type: Literal["IMAGE_ONLY", "TEXT_ONLY", "MIXED"] = Field(
+        "IMAGE_ONLY", 
+        description="The core visual requirement for this base segment."
+    )
+    base_prompt_context: Optional[str] = Field(
+        None, 
+        description="Cinematic context for the base image if applicable."
+    )
+    b_roll_overlays: List[BRollOverlay] = Field(
+        default_factory=list, 
+        description="Array of dynamic text pop-ups for fast-paced sequences. Empty for slow-paced channels."
+    )
 
 class AudioBatch(BaseModel):
     batch_id: int
@@ -60,6 +84,10 @@ class AudioBatch(BaseModel):
 class TimestampedTranscription(BaseModel):
     batches: List[AudioBatch]
     
+# -----------------------------
+# PROMPT PIPELINE SCHEMAS
+# -----------------------------
+
 class SingleShotPrompt(BaseModel):
     start_time: float = Field(..., description="The exact start time from the transcript segment.")
     image_prompt: str = Field(..., description="A completely self-contained visual prompt using the required style, characters, props, and words constraints.")
@@ -67,99 +95,32 @@ class SingleShotPrompt(BaseModel):
 class BatchPromptResponse(BaseModel):
     shots: list[SingleShotPrompt] = Field(..., description="The list of generated image prompts mapping 1:1 to the transcript segment timestamps.")
 
-
 class ThumbnailData(BaseModel):
-    image_prompt: str = Field(
-        description="Detailed production-ready, standalone image generation prompt."
-    )
-
-    text: str = Field(
-        description="Thumbnail text. 2-5 words maximum."
-    )
-
-    concept: str = Field(
-        description="Thumbnail visual concept and curiosity gap."
-    )
-
-    score: int = Field(
-        description="Estimated CTR score from 0-100."
-    )
-
-    explanation: str = Field(
-        description="Why this thumbnail is expected to perform well."
-    )
-
+    image_prompt: str = Field(description="Detailed production-ready, standalone image generation prompt.")
+    text: str = Field(description="Thumbnail text. 2-5 words maximum.")
+    concept: str = Field(description="Thumbnail visual concept and curiosity gap.")
+    score: int = Field(description="Estimated CTR score from 0-100.")
+    explanation: str = Field(description="Why this thumbnail is expected to perform well.")
 
 class ThumbnailResponse(BaseModel):
     thumbnails: List[ThumbnailData]
 
-
 # -----------------------------
-# SEO
+# SEO & METADATA
 # -----------------------------
 
 class SEOKeywords(BaseModel):
-
-    primary: List[str] = Field(
-        description="20-30 high volume primary search keywords."
-    )
-
-    secondary: List[str] = Field(
-        description="40-60 long-tail keywords."
-    )
-
-    autocomplete: List[str] = Field(
-        description="20-40 YouTube autocomplete style phrases."
-    )
-
-    questions: List[str] = Field(
-        description="20-30 search questions users may type."
-    )
-
-    entities: List[str] = Field(
-        description="Important people, companies, technologies, products, concepts and events from the script."
-    )
-
-
-# -----------------------------
-# Metadata
-# -----------------------------
+    primary: List[str] = Field(description="20-30 high volume primary search keywords.")
+    secondary: List[str] = Field(description="40-60 long-tail keywords.")
+    autocomplete: List[str] = Field(description="20-40 YouTube autocomplete style phrases.")
+    questions: List[str] = Field(description="20-30 search questions users may type.")
+    entities: List[str] = Field(description="Important people, companies, technologies, products, concepts and events from the script.")
 
 class VideoMetadata(BaseModel):
-
-    title: str = Field(
-        description="50-55 character high CTR YouTube title. Must complement, not duplicate, thumbnail text."
-    )
-
-    description: str = Field(
-        description=(
-            "2500-4500 character SEO-optimized YouTube description. "
-            "Must contain documentary-style introduction, chapters, research links, "
-            "channel sections, production credits and hashtags."
-        )
-    )
-
-    seo_keywords: SEOKeywords = Field(
-        description="Complete structured SEO keyword package."
-    )
-
-    hashtags: List[str] = Field(
-        description="15-25 lowercase hashtags."
-    )
-
-    tags: List[str] = Field(
-        description=(
-            "Comma-field tags as individual strings. "
-            "Total combined characters should stay under YouTube's 500-character limit."
-        )
-    )
-
-    score: int = Field(
-        ge=0,
-        le=100,
-        description="Estimated SEO/CTR score."
-    )
-
-    explanation: str = Field(
-        description="Why this metadata package should perform well."
-    )
+    title: str = Field(description="50-55 character high CTR YouTube title. Must complement, not duplicate, thumbnail text.")
+    description: str = Field(description=("2500-4500 character SEO-optimized YouTube description. Must contain documentary-style introduction, chapters, research links, channel sections, production credits and hashtags."))
+    seo_keywords: SEOKeywords = Field(description="Complete structured SEO keyword package.")
+    hashtags: List[str] = Field(description="15-25 lowercase hashtags.")
+    tags: List[str] = Field(description=("Comma-field tags as individual strings. Total combined characters should stay under YouTube's 500-character limit."))
+    score: int = Field(ge=0, le=100, description="Estimated SEO/CTR score.")
+    explanation: str = Field(description="Why this metadata package should perform well.")
