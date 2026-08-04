@@ -1,9 +1,11 @@
 import sys
 import time
-import re
 import base64
 import shutil
 from pathlib import Path
+
+# --- NEW: Injecting Centralized Parser ---
+from app.utils.timeline_parser import TimelineParser
 
 try:
     from playwright.sync_api import sync_playwright, Error as PlaywrightError
@@ -108,14 +110,20 @@ class VibesAIAutomator:
             print(f"[System] Session '{new_name}' saved successfully!")
 
     def _parse_animation_prompts(self, prompt_file: Path):
+        """V2: Parses the animation prompts using TimelineParser for tag resilience."""
         clips = []
         with open(prompt_file, 'r', encoding='utf-8') as f:
             for line in f:
-                match = re.match(r'\[([\d_]+-[\d_]+)\]\s*(.*)', line.strip())
-                if match:
+                if not line.strip():
+                    continue
+                parsed_clip = TimelineParser.parse_prompt_line(line)
+                if parsed_clip:
                     clips.append({
-                        "timestamp": match.group(1),
-                        "prompt": match.group(2)
+                        "timestamp": f"{parsed_clip.start_str}-{parsed_clip.end_str}",
+                        "prompt": parsed_clip.content,
+                        "clip_type": parsed_clip.clip_type,
+                        "image_filename": parsed_clip.expected_filename,
+                        "video_filename": parsed_clip.expected_filename.replace("_image.png", "_clip.mp4")
                     })
         return clips
 
@@ -162,17 +170,19 @@ class VibesAIAutomator:
                 timestamp_str = clip['timestamp']
                 anim_prompt = clip['prompt']
                 
-                base_filename = f"[{timestamp_str}]_clip.mp4"
-                image_filename = f"[{timestamp_str}]_image.png"
+                # --- V2 FILENAME MAPPING ---
+                base_filename = clip['video_filename']
+                image_filename = clip['image_filename']
                 image_path = image_dir / image_filename
 
-                # --- HYBRID OPTIMIZATION: INSTANT STATIC BYPASS ---
+                # --- HYBRID OPTIMIZATION: INSTANT STATIC BYPASS (Includes B-Rolls) ---
                 if anim_prompt.strip().upper() == "STATIC":
                     all_images_exist = all((v_dir / image_filename).exists() for v_dir in variant_dirs)
                     if all_images_exist:
                         print(f"\n[Checkpoint] Clip [{timestamp_str}] (STATIC) already injected. Skipping.")
                     else:
-                        print(f"\n[Vibes Worker] Clip [{timestamp_str}] marked as STATIC by AI Director. Bypassing render API...")
+                        tag_msg = f"[{clip['clip_type']}] " if clip['clip_type'] != "DEFAULT" else ""
+                        print(f"\n[Vibes Worker] {tag_msg}Clip [{timestamp_str}] marked as STATIC by AI Director. Bypassing render API...")
                         for v_dir in variant_dirs:
                             dest = v_dir / image_filename
                             if not dest.exists() and image_path.exists():
@@ -220,7 +230,6 @@ class VibesAIAutomator:
                             page.goto(self.VIBES_URL, wait_until="domcontentloaded", timeout=60000)
                             time.sleep(6)
                             
-                            # THE FIX: If login causes navigation, force a sync before continuing
                             if self._handle_unexpected_login(page):
                                 print("  [System] Re-syncing dashboard after login navigation...")
                                 page.goto(self.VIBES_URL, wait_until="domcontentloaded", timeout=60000)
@@ -232,7 +241,6 @@ class VibesAIAutomator:
                                 create_new_btn.click()
                                 time.sleep(3)
                                 
-                                # THE FIX: Explicitly verify we entered the workspace!
                                 workspace_check = page.locator('button[data-analytics-id="creation_gallery.start_end_frame_selection_click"], button:has-text("Add start frame"), div[data-lexical-editor="true"]').first
                                 workspace_check.wait_for(state="visible", timeout=15000)
                                 
@@ -241,7 +249,6 @@ class VibesAIAutomator:
                                     raise BrowserRelaunchException("Toast error detected during project creation!")
                                 raise Exception(f"Failed to enter project workspace: {proj_err}")
 
-                            # Post-click toast check
                             if self._check_error_toasts(page):
                                 raise BrowserRelaunchException("Toast error detected after entering workspace!")
 
@@ -389,11 +396,9 @@ class VibesAIAutomator:
                         new_vid_srcs = set()
                         early_fail_ignored = False
 
-                        # --- STEP 9: POLLING WITH TIMEOUT THRESHOLD ---
                         while True:
                             elapsed = time.time() - start_wait
 
-                            # THRESHOLD CHECK: Force reset if rendering takes longer than self.GENERATION_TIMEOUT (120s)
                             if elapsed > self.GENERATION_TIMEOUT:
                                 print(f"\n  [🚨] TIMEOUT THRESHOLD EXCEEDED ({int(elapsed)}s > {self.GENERATION_TIMEOUT}s)!")
                                 raise BrowserRelaunchException(f"Generation parsing hung for {int(elapsed)}s. Nuke browser and retry.")
@@ -520,7 +525,7 @@ class VibesAIAutomator:
                             return
                         
                         print(f"  [System] Switched to '{self.session_dirs[self.current_session_index].name}'. Booting browser...")
-                        browser, page = launch_browser(self.session_dirs[self.current_session_index])
+                        browser, page = launch_browser(self.current_session_index)
                         project_created = False
                         clips_in_current_project = 0
                         swapped_account = True  
