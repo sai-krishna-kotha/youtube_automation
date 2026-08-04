@@ -1,9 +1,10 @@
 import sys, os
 import time
 import base64
-import re
 import random
 from pathlib import Path
+
+from app.utils.timeline_parser import TimelineParser
 
 try:
     from playwright.sync_api import sync_playwright
@@ -18,6 +19,7 @@ class GoogleFlowScraper:
         self.account_order = [
             "session_1",
             "session_2",
+            "session_3",
         ]
         
         self.session_directories = [base_dir / name for name in self.account_order]
@@ -35,7 +37,8 @@ class GoogleFlowScraper:
         else:
             self.session_directories = valid_sessions
 
-        self.session_dir = self.session_directories[0] if self.session_directories else None
+        self.session_dir = None
+        self.current_session_idx = 0 # Tracks the active account in the array
 
         # --- FLOW CONFIGURATION ---
         self.FLOW_URL = "https://labs.google/fx/tools/flow"
@@ -45,8 +48,8 @@ class GoogleFlowScraper:
         
         # --- ⚙️ MASTER TOGGLE FOR IMAGE CHAINING ⚙️ ---
         self.ENABLE_IMAGE_CHAINING = False 
-        self.GENERATE_TIMEOUT = 120000 if self.ENABLE_IMAGE_CHAINING else 80000 
-        self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial features(eyes, mouth) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
+        self.GENERATE_TIMEOUT = 120000 if self.ENABLE_IMAGE_CHAINING else 90000 
+        self.PROMPT_PREFIX = "Create an image based on the prompt below. Ensure every character has clear, expressive facial entities(EYES, MOUTH mandatory) appropriate for the situation. Do not generate blank or empty faces:\n\n"        
         self.CHAINED_PREFIX = "Maintain the exact character design, art style, and color palette from the attached reference image. Change the action, pose, and background strictly according to the prompt below. Ensure clear facial features:\n\n"
 
         self.PROMPT_BOX_SELECTOR = 'div[data-slate-editor="true"][role="textbox"]'
@@ -94,8 +97,40 @@ class GoogleFlowScraper:
         except Exception as e:
             print(f"  [Error] Failed to reset workspace: {e}")
 
+    def _launch_and_prep_session(self, p, session_dir):
+        """Helper to hot-load a browser context and prep the workspace."""
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=str(session_dir),
+            headless=self.HEADLESS_MODE,
+            viewport={"width": 1280, "height": 720},
+            args=["--disable-blink-features=AutomationControlled"],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+        page = context.new_page()
+        page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
+        time.sleep(3)
+
+        try:
+            sign_in_btn = page.locator('text="Sign in"').first
+            if sign_in_btn.is_visible(timeout=5000):
+                print("  -> 'Sign in' screen detected. Clicking to authenticate using saved session...")
+                sign_in_btn.click()
+                page.wait_for_load_state("networkidle", timeout=120000)
+        except Exception:
+            pass
+
+        try:
+            new_btn = page.locator('text="New project"').first
+            if new_btn.is_visible(timeout=7000):
+                new_btn.click()
+                time.sleep(3)
+        except Exception:
+            pass
+            
+        return context, page
+
     def generate_images(self, input_file: Path, output_dir: Path):
-        """Phase 1.5 Integration: Automated Image Generation with Toggleable Chaining."""
+        """Phase 1.5 Integration: Automated Image Generation with Auto-Rotation."""
         if not self.session_directories:
             raise Exception("\n[!] No session data found. Run setup_session() first!")
             
@@ -106,76 +141,29 @@ class GoogleFlowScraper:
 
         print(f"\n[Scraper] Found {len(lines)} image prompts.")
         print(f"[Scraper] Active Account Pool: {len(self.session_directories)} sessions.")
-        if self.ENABLE_IMAGE_CHAINING:
-            print("[Scraper] Image Chaining is ON (High Consistency Mode)")
-        else:
-            print("[Scraper] Image Chaining is OFF (High Speed Mode)")
         
         with sync_playwright() as p:
-            context = None
-            active_session_dir = None
-            
-            print("\n[System] Searching for an available session...")
-            for session_name in self.account_order:
-                temp_dir = self.base_dir / session_name
-                if not temp_dir.exists():
-                    continue
-                
+            # Try to find the first unlocked session
+            self.current_session_idx = -1
+            for idx, session_dir in enumerate(self.session_directories):
+                lock_file = session_dir / "lockfile"
                 is_locked = False
-                lock_file = temp_dir / "lockfile" 
-                
                 if lock_file.exists():
                     try:
-                        with open(lock_file, 'a'):
-                            pass
+                        with open(lock_file, 'a'): pass
                     except OSError:
                         is_locked = True
-
-                if is_locked:
-                    print(f"  [!] '{session_name}' is currently active in another window. Skipping...")
-                    continue
                 
-                try:
-                    context = p.chromium.launch_persistent_context(
-                        user_data_dir=str(temp_dir),
-                        headless=self.HEADLESS_MODE,
-                        viewport={"width": 1280, "height": 720},
-                        args=["--disable-blink-features=AutomationControlled"],
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                    )
-                    active_session_dir = temp_dir
-                    self.session_dir = active_session_dir
-                    print(f"  [✓] Successfully locked '{session_name}' for this project!")
+                if not is_locked:
+                    self.current_session_idx = idx
                     break
-                except Exception as e:
-                    print(f"  [!] Failed to launch '{session_name}': {e}")
-            
-            if not context:
-                raise Exception("\n[!] All sessions are currently in use. Please wait for the other process to finish or add a new session.")
-            
-            page = context.new_page()
-            page.goto(self.FLOW_URL, wait_until="domcontentloaded", timeout=60000)
-            time.sleep(3)
+                    
+            if self.current_session_idx == -1:
+                raise Exception("\n[!] All sessions are locked or currently in use.")
 
-            print("  -> Checking for 'Sign in' landing page...")
-            try:
-                sign_in_btn = page.locator('text="Sign in"').first
-                if sign_in_btn.is_visible(timeout=5000):
-                    print("  -> 'Sign in' screen detected. Clicking to authenticate using saved session...")
-                    sign_in_btn.click()
-                    page.wait_for_load_state("networkidle", timeout=120000)
-                else:
-                    print("  -> Active session verified.")
-            except Exception:
-                print("  -> No 'Sign in' button found. Proceeding...")
-
-            try:
-                new_btn = page.locator('text="New project"').first
-                new_btn.wait_for(state="visible", timeout=7000)
-                new_btn.click()
-                time.sleep(3)
-            except Exception:
-                pass
+            self.session_dir = self.session_directories[self.current_session_idx]
+            print(f"\n[System] Locking initial session: '{self.session_dir.name}'")
+            context, page = self._launch_and_prep_session(p, self.session_dir)
 
             line_idx = 0 
             previous_image_path = None 
@@ -183,16 +171,13 @@ class GoogleFlowScraper:
             while line_idx < len(lines):
                 line = lines[line_idx]
                 
-                # --- THE BUG FIX: STRICT ANCHORED REGEX ---
-                # ^ forces it to only match at the very start of the line.
-                # \s* makes it forgiving of accidental spaces.
-                match = re.match(r"^\[\s*([\d_]+)\s*-\s*([\d_]+)\s*\]\s*(.*)", line)
-                if not match:
+                parsed_clip = TimelineParser.parse_prompt_line(line)
+                if not parsed_clip:
                     line_idx += 1
                     continue
                 
-                start_s, end_s, prompt = match.groups()
-                file_name = f"[{start_s}-{end_s}]_image.png"
+                prompt = parsed_clip.content
+                file_name = parsed_clip.expected_filename
                 output_path = output_dir / file_name
 
                 if output_path.exists():
@@ -203,6 +188,7 @@ class GoogleFlowScraper:
 
                 print(f"\nProcessing [{line_idx+1}/{len(lines)}] via {self.session_dir.name}: {file_name}")
                 success = False
+                account_switched = False
                 
                 for attempt in range(self.MAX_RETRIES):
                     try:
@@ -221,35 +207,22 @@ class GoogleFlowScraper:
                                     time.sleep(1.5) 
 
                                 page.set_input_files('input[type="file"]', str(previous_image_path), timeout=10000)
-                                print(f"  -> Uploaded reference image: {previous_image_path.name}")
-                                
                                 add_prompt_btn = page.locator('button:has-text("Add to Prompt")').first
-                                error_toast = page.locator('text="Something went wrong loading your media"').first
                                 
                                 button_found = False
                                 for _ in range(20): 
-                                    if error_toast.is_visible():
-                                        raise Exception("Google Flow server rejected the media upload (Canvas/Network error).")
-                                    
                                     if add_prompt_btn.is_visible():
                                         button_found = True
                                         break
-                                        
                                     time.sleep(1.0)
                                 
-                                if not button_found:
-                                    raise Exception("Timed out waiting for 'Add to Prompt' button.")
-
-                                add_prompt_btn.click()
-                                time.sleep(2.0) 
-                                
-                                dynamic_prefix = self.CHAINED_PREFIX
-                                
-                            except Exception as e:
-                                print(f"  [Warning] Image chain broken for this clip. Proceeding blindly: {e}")
+                                if button_found:
+                                    add_prompt_btn.click()
+                                    time.sleep(2.0) 
+                                    dynamic_prefix = self.CHAINED_PREFIX
+                            except Exception:
                                 page.keyboard.press("Escape")
                                 time.sleep(1.0)
-                                dynamic_prefix = self.PROMPT_PREFIX
 
                         baseline_srcs = page.evaluate("() => Array.from(document.querySelectorAll('img')).map(i => i.src)")
 
@@ -275,11 +248,15 @@ class GoogleFlowScraper:
                             btn = page.locator(self.GENERATE_BTN_SELECTOR).first
                             btn.click(timeout=5000)
                         except Exception:
-                            print("  -> Button click failed. Falling back to Enter key submission...")
                             page.keyboard.press("Enter")
                             
                         print(f"  -> Prompt submitted. Waiting for NEW image...")
 
+                        # --- NEW ACTIVE POLLING SYSTEM ---
+                        start_wait = time.time()
+                        image_rendered = False
+                        limit_reached = False
+                        
                         js_wait_for_new = """(baseline) => {
                             const imgs = Array.from(document.querySelectorAll('img')).filter(i => 
                                 i.complete && (i.naturalWidth > 400 || i.width > 400) && !i.src.includes('avatar')
@@ -288,7 +265,26 @@ class GoogleFlowScraper:
                             return newImgs.length > 0;
                         }"""
                         
-                        page.wait_for_function(js_wait_for_new, arg=baseline_srcs, timeout=self.GENERATE_TIMEOUT)
+                        while time.time() - start_wait < (self.GENERATE_TIMEOUT / 1000):
+                            # 1. Check if image generated successfully
+                            if page.evaluate(js_wait_for_new, arg=baseline_srcs):
+                                image_rendered = True
+                                break
+                            
+                            # 2. Check for the Daily Limit error specifically (Bypassing apostrophe issues)
+                            if page.get_by_text("reached the daily limit", exact=False).is_visible():
+                                limit_reached = True
+                                break
+                                
+                            time.sleep(1.0)
+
+                        if limit_reached:
+                            raise Exception("DAILY_LIMIT_REACHED")
+                            
+                        if not image_rendered:
+                            raise Exception("Timeout waiting for image generation.")
+
+                        # --- EXTRACTION LOGIC ---
                         print(f"  -> Image rendered! Waiting {self.DOWNLOAD_DELAY}s for data to finalize...")
                         time.sleep(self.DOWNLOAD_DELAY)
 
@@ -301,11 +297,9 @@ class GoogleFlowScraper:
                         }"""
                         
                         img_src = page.evaluate(js_extract_src, arg=baseline_srcs)
-                        if not img_src:
-                            raise Exception("Image element appeared but src was null.")
-                            
                         extracted = False
-                        if img_src.startswith('http'):
+                        
+                        if img_src and img_src.startswith('http'):
                             try:
                                 res = context.request.get(img_src)
                                 with open(output_path, 'wb') as f:
@@ -336,22 +330,41 @@ class GoogleFlowScraper:
                                     f.write(base64.b64decode(encoded))
                                 extracted = True
 
-                        if extracted:
-                            if output_path.exists():
-                                print(f"  [✓] Verified on disk securely: {output_path.name}")
-                                success = True
-                                previous_image_path = output_path 
-                                break
-                            else:
-                                raise Exception("Data extracted but file failed to write to disk.")
+                        if extracted and output_path.exists():
+                            print(f"  [✓] Verified on disk securely: {output_path.name}")
+                            success = True
+                            previous_image_path = output_path 
+                            break
                         else:
                             raise Exception("Failed to extract data via Network and Canvas.")
 
                     except Exception as e:
-                        print(f"  [Error] Attempt {attempt + 1}: {e}")
-                        if attempt < self.MAX_RETRIES - 1:
-                            self.reset_workspace(page)
+                        error_msg = str(e)
+                        
+                        # --- NEW ACCOUNT ROTATION LOGIC ---
+                        if "DAILY_LIMIT_REACHED" in error_msg:
+                            print(f"\n  [🚨] DAILY LIMIT HIT on account: {self.session_dir.name}")
+                            context.close()
+                            
+                            self.current_session_idx += 1
+                            if self.current_session_idx >= len(self.session_directories):
+                                raise Exception("\n[CRITICAL] All accounts have reached their daily limit! Exiting system.")
+                                
+                            self.session_dir = self.session_directories[self.current_session_idx]
+                            print(f"  [🔄] Hot-swapping to next account: {self.session_dir.name}...")
+                            
+                            context, page = self._launch_and_prep_session(p, self.session_dir)
+                            account_switched = True
+                            break # Break retry loop to restart the exact same prompt
+                        else:
+                            print(f"  [Error] Attempt {attempt + 1}: {error_msg}")
+                            if attempt < self.MAX_RETRIES - 1:
+                                self.reset_workspace(page)
                 
+                # If we switched accounts, skip incrementing line_idx so we retry the current line
+                if account_switched:
+                    continue
+                    
                 if not success:
                     print(f"  [!] Failed after {self.MAX_RETRIES} attempts. Skipping to next.")
 
