@@ -19,7 +19,6 @@ from pydub import AudioSegment
 FFMPEG_EXE = Path("C:/Users/kotha/Downloads/important/ffmpeg/bin/ffmpeg.exe")
 AudioSegment.converter = str(FFMPEG_EXE)
 
-# --- NEW: SHORT VIDEO HANDLING ---
 # Options: "slomo" (stretches video to fit gap) OR "freeze" (holds last frame)
 VIDEO_EXTEND_MODE = "slomo" 
 # ==========================================
@@ -109,10 +108,10 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
         prev_duration = parsed_data[i-1]["duration"]
         start_time_sec = parsed_data[i]["time"]
         
-        if prev_duration > 0.5:
+        if prev_duration > 1.0:
             sfx_choice = random.choice(sfx_files)
             sfx = AudioSegment.from_file(str(sfx_choice))
-            sfx = sfx - 4 
+            sfx = sfx - 6 
             
             insert_ms = int(start_time_sec * 1000) - 200 
             insert_ms = max(0, insert_ms)
@@ -125,16 +124,10 @@ def mix_sfx_track(parsed_data, master_audio_path: Path, temp_dir: Path, base_dir
 
 def generate_capcut_id():
     """Generates a CapCut-compliant UUID."""
-    import uuid
     return str(uuid.uuid4()).upper()
 
 def export_capcut_draft(parsed_data, project_dir: Path, audio_path: Path):
     """Duplicates a blank CapCut template and safely injects timeline data with native UI physics."""
-    import json
-    import time
-    import shutil
-    import os
-    
     print("\n[CapCut Engine] Initializing Golden Template Injection...")
     
     local_appdata = os.getenv('LOCALAPPDATA')
@@ -147,7 +140,6 @@ def export_capcut_draft(parsed_data, project_dir: Path, audio_path: Path):
     
     if not template_path.exists():
         print("  [!] ERROR: 'Golden_Template' not found in CapCut!")
-        print("  [!] Please create a blank project named 'Golden_Template' and close CapCut.")
         return
 
     project_name = f"AutoDraft_{project_dir.name}"
@@ -307,8 +299,7 @@ def export_capcut_draft(parsed_data, project_dir: Path, audio_path: Path):
             with open(content_file, "w", encoding="utf-8") as f:
                 json.dump(content_data, f, indent=4)
 
-        print(f"  [+] Golden Template successfully hijacked for: {project_name} (Using Golden UIDs)")
-        print(f"  [SUCCESS] Open CapCut Desktop to verify your fully working draft!")
+        print(f"  [+] Golden Template successfully hijacked for: {project_name}")
         
     except Exception as e:
         print(f"  [!] Golden Template Injection Failed: {e}")
@@ -323,7 +314,6 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
     tag_suffix = f"_{variant_tag}" if variant_tag else ""
     base_video_name = f"video_{timestamp}{tag_suffix}"
 
-    # DYNAMIC FILE DISCOVERY: Collects both videos and images
     valid_exts = ['.mp4', '.mov', '.png', '.jpg', '.jpeg']
     if media_mode == "video":
         valid_exts = ['.mp4', '.mov']
@@ -331,32 +321,36 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
         valid_exts = ['.png', '.jpg', '.jpeg']
 
     all_files = [f for f in target_folder.iterdir() if f.suffix.lower() in valid_exts]
-    pattern = re.compile(r'\[([\d_]+)-([\d_]+)\]')
     
     timestamp_map = {}
+    
+    pattern = re.compile(r'(?:\[([A-Za-z-]+)\]_)?\[?([\d_]+)-([\d_]+)\]?')
+    
     for m_file in all_files:
         match = pattern.search(m_file.name)
         if match:
-            ts_key = match.group(0)
-            start_sec = float(match.group(1).replace('_', '.'))
-            end_sec = float(match.group(2).replace('_', '.'))
-            duration = max(0.5, round(end_sec - start_sec, 3))
+            tag = match.group(1)
+            
+            if tag and tag.upper() == "B-ROLL":
+                continue
+                
+            start_str = match.group(2).strip('_')
+            end_str = match.group(3).strip('_')
+            
+            start_sec = float(start_str.replace('_', '.'))
+            
+            ts_key = f"{start_str}_{end_str}"
             is_vid = m_file.suffix.lower() in ['.mp4', '.mov']
             
-            # Prefer video files over images if both exist for the same timestamp block
             if ts_key in timestamp_map:
                 if is_vid and not timestamp_map[ts_key]["is_video"]:
-                    timestamp_map[ts_key] = {
-                        "path": m_file, 
-                        "time": start_sec, 
-                        "duration": duration,
-                        "is_video": True
-                    }
+                    timestamp_map[ts_key].update({"path": m_file, "is_video": True})
             else:
+                # Store the start_sec initially, we will precisely calculate exact duration below
                 timestamp_map[ts_key] = {
                     "path": m_file, 
                     "time": start_sec, 
-                    "duration": duration,
+                    "duration": 0.0, 
                     "is_video": is_vid
                 }
 
@@ -368,6 +362,19 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
 
     parsed_data.sort(key=lambda x: x["time"])
     total_audio_time = get_audio_duration(audio_path)
+
+    # --- THE SYNC-LOCK FIX: DYNAMIC DURATION RECALCULATION ---
+    # This guarantees the video track perfectly aligns with absolute audio timestamps without gaps
+    for i in range(len(parsed_data)):
+        curr_time = parsed_data[i]["time"]
+        if i < len(parsed_data) - 1:
+            next_time = parsed_data[i+1]["time"]
+            calc_dur = next_time - curr_time
+        else:
+            calc_dur = total_audio_time - curr_time
+            
+        parsed_data[i]["duration"] = max(0.2, round(calc_dur, 3))
+    # ---------------------------------------------------------
 
     print(f"\n--- PROCESSING: {target_folder.name.upper()} ---")
     print(f"[Engine] Media Mode: {media_mode.upper()}")
@@ -419,8 +426,6 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
         else:
             out_transition = "hard_cut" if i == len(parsed_data) - 1 else get_random_transition()
 
-        vf_chain = "scale=3840:2160,fps=30"
-        
         if not is_clip_video and not is_raw_mode:
             motion_style = get_smart_motion_style(last_motion)
             last_motion = motion_style
@@ -441,8 +446,9 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
             motion_style = "video_trim" 
             actual_vid_dur = get_video_duration(m_path)
             
-            # --- THE FIX: SMART SHORT VIDEO EXTENSION ---
-            if 0 < actual_vid_dur < duration:
+            vf_chain = "scale=3840:2160"
+            
+            if 0 < actual_vid_dur < (duration - 0.1):
                 if VIDEO_EXTEND_MODE == "slomo":
                     stretch_factor = duration / actual_vid_dur
                     vf_chain += f",setpts={stretch_factor}*PTS"
@@ -450,8 +456,11 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
                 elif VIDEO_EXTEND_MODE == "freeze":
                     vf_chain += ",tpad=stop_mode=clone:stop=-1"
                     motion_style = "video_freeze"
+            
+            vf_chain += ",fps=30"
         else:
             motion_style = "static"
+            vf_chain = "scale=3840:2160,fps=30"
 
         if not is_raw_mode:
             fade_duration = 0.3
@@ -488,6 +497,11 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
             sys.exit(1)
             
         blueprint_lines.append(f"file '{clip_path.name}'")
+        
+        # --- THE SYNC-LOCK FIX: BLUEPRINT ENFORCEMENT ---
+        blueprint_lines.append(f"duration {duration}")
+        # ------------------------------------------------
+        
         incoming_transition = out_transition
 
     print("\n  [+] Micro-clips rendered successfully.")
@@ -501,7 +515,7 @@ def build_single_video(project_dir: Path, media_mode: str, target_folder: Path, 
         
         concat_cmd = (
             f'"{FFMPEG_EXE}" -f concat -safe 0 -i "{blueprint_path}" -i "{audio_track_path}" '
-            f'-c:v copy -c:a aac -shortest -y "{final_output}"'
+            f'-map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest -y "{final_output}"'
         )
         
         final_result = subprocess.run(concat_cmd, shell=True, capture_output=True, text=True)
@@ -520,66 +534,75 @@ def build_video(project_dir: Path, media_mode: str = "hybrid", enable_capcut: bo
         print("\n[!] ERROR: '3_upscaled' folder is missing. Check your workspace.")
         return
 
+    curated_dir = upscale_dir / "curated_master"
+    
+    if curated_dir.exists():
+        shutil.rmtree(curated_dir)
+    curated_dir.mkdir(exist_ok=True)
+    
+    print("\n[System] Consolidating base assets (Ignoring subfolders)...")
+    for item in upscale_dir.iterdir():
+        if item.is_file() and item.suffix.lower() in ['.png', '.jpg', '.jpeg', '.mp4', '.mov']:
+            shutil.copy2(item, curated_dir / item.name)
+
     variant_folders = sorted([d for d in upscale_dir.iterdir() if d.is_dir() and d.name.startswith("variant_")])
 
-    if variant_folders:
+    if variant_folders and media_mode in ["video", "hybrid"]:
         print("\n" + "="*50)
         print("   🎬 INTERACTIVE DIRECTOR'S CUT")
         print("="*50)
         
-        curated_dir = upscale_dir / "curated_master"
-        curated_dir.mkdir(exist_ok=True)
-        base_files = sorted([f.name for f in variant_folders[0].iterdir() if f.is_file()])
+        video_files = set()
+        for v_dir in variant_folders:
+            for f in v_dir.iterdir():
+                if f.is_file() and f.suffix.lower() in ['.mp4', '.mov']:
+                    video_files.add(f.name)
+        
+        video_files = sorted(list(video_files))
+        
+        if video_files:
+            if bulk_choice not in ["1", "2", "3", "4", "M"]:
+                print("How would you like to select your variants?")
+                while bulk_choice not in ["1", "2", "3", "4", "M"]:
+                    bulk_choice = input("Enter a number (1-4) to Auto-Apply to ALL scenes, OR press 'M' for Manual Selection: ").strip().upper()
 
-        if bulk_choice not in ["1", "2", "3", "4", "M"]:
-            print("How would you like to select your variants?")
-            while bulk_choice not in ["1", "2", "3", "4", "M"]:
-                bulk_choice = input("Enter a number (1-4) to Auto-Apply to ALL scenes, OR press 'M' for Manual Selection: ").strip().upper()
-
-        if bulk_choice in ["1", "2", "3", "4"]:
-            print(f"\n[System] Bulk Auto-Applying Variant {bulk_choice} to all scenes...")
-            for clip_name in base_files:
-                if (curated_dir / clip_name).exists():
-                    continue
-                
-                choice = bulk_choice
-                if not (upscale_dir / f"variant_{choice}" / clip_name).exists():
-                    print(f"  [!] Variant {choice} missing for {clip_name}. Falling back to Variant 1.")
-                    choice = "1"
+            if bulk_choice in ["1", "2", "3", "4"]:
+                print(f"\n[System] Bulk Auto-Applying Variant {bulk_choice} to all video scenes...")
+                for clip_name in video_files:
+                    choice = bulk_choice
+                    if not (upscale_dir / f"variant_{choice}" / clip_name).exists():
+                        print(f"  [!] Variant {choice} missing for {clip_name}. Falling back to Variant 1.")
+                        choice = "1"
+                        
+                    src_file = upscale_dir / f"variant_{choice}" / clip_name
+                    if src_file.exists():
+                        shutil.copy2(src_file, curated_dir / clip_name)
+                        print(f"  [Bulk] Copied Variant {choice} -> {clip_name}")
+            else:
+                print("\n[System] Initiating Manual Clip-by-Clip Selection...")
+                for clip_name in video_files:
+                    print(f"\n[Scene] {clip_name}")
+                    valid_choices = []
                     
-                src_file = upscale_dir / f"variant_{choice}" / clip_name
-                shutil.copy2(src_file, curated_dir / clip_name)
-                print(f"  [Bulk] Copied Variant {choice} -> {clip_name}")
-        else:
-            print("\n[System] Initiating Manual Clip-by-Clip Selection...")
-            for clip_name in base_files:
-                if (curated_dir / clip_name).exists():
-                    continue
+                    for i in range(1, 5):
+                        if (upscale_dir / f"variant_{i}" / clip_name).exists():
+                            valid_choices.append(str(i))
+                    
+                    if not valid_choices:
+                        print(f"  -> No variants found. Skipping.")
+                        continue
 
-                print(f"\n[Scene] {clip_name}")
-                valid_choices = []
-                
-                for i in range(1, 5):
-                    if (upscale_dir / f"variant_{i}" / clip_name).exists():
-                        valid_choices.append(str(i))
-                
-                if not valid_choices:
-                    print(f"  -> No variants found. Skipping.")
-                    continue
+                    choice = ""
+                    while choice not in valid_choices:
+                        choice = input(f"Which variant is best? ({'/'.join(valid_choices)}): ").strip()
 
-                choice = ""
-                while choice not in valid_choices:
-                    choice = input(f"Which variant is best? ({'/'.join(valid_choices)}): ").strip()
+                    src_file = upscale_dir / f"variant_{choice}" / clip_name
+                    shutil.copy2(src_file, curated_dir / clip_name)
+                    print(f"  [✓] Kept Variant {choice}")
 
-                src_file = upscale_dir / f"variant_{choice}" / clip_name
-                shutil.copy2(src_file, curated_dir / clip_name)
-                print(f"  [✓] Kept Variant {choice}")
-
-        print("\n[System] Curation complete! Assembling your final masterpiece...")
-        build_single_video(project_dir, media_mode, curated_dir, variant_tag="DIRECTORS_CUT", enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
-    else:
-        build_single_video(project_dir, media_mode, upscale_dir, enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
-
+    print("\n[System] Asset curation complete! Assembling your final masterpiece...")
+    build_single_video(project_dir, media_mode, curated_dir, variant_tag="DIRECTORS_CUT", enable_capcut=enable_capcut, enable_ffmpeg=enable_ffmpeg)
+    
     if enable_ffmpeg:
         print(f"\n[SUCCESS] Factory Pipeline Complete!")
 
@@ -588,8 +611,8 @@ def main():
     
     print("\n=== MEDIA TYPE SELECTION ===")
     print("1. Image Mode (Upscaled static images)")
-    print("2. Video Mode (Pre-rendered Vibes AI clips)")
-    print("3. Hybrid Mode (Mixed Static Images + Vibes AI Videos - DEFAULT)")
+    print("2. Video Mode (Pre-rendered AI clips)")
+    print("3. Hybrid Mode (Mixed Static Images + AI Videos - DEFAULT)")
     m_choice = input("Select Media Type (1, 2, or 3) [Press Enter for 3]: ").strip()
     
     print("\n=== OUTPUT PIPELINE SELECTION ===")
