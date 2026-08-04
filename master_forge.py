@@ -357,57 +357,12 @@ def main():
         if ans == '1':
             run_phase3 = True
             
-    # --- NEW: EXPLICIT MEDIA TYPE & OUTPUT SELECTION ---
+    # --- DEFAULT VARIABLES (Variables stay here, Prompts moved to Phase 4) ---
     enable_ffmpeg = True
     enable_capcut = False
     media_mode_sel = "hybrid"
-    bulk_choice = "M"  # Default to manual unless overridden below
-    
-    if run_phase4:
-        print("\n" + "-"*40)
-        print("   SELECT MEDIA TYPE (PHASE 4)")
-        print("-" * 40)
-        print("  1. Image Mode (Upscaled static images)")
-        print("  2. Video Mode (Pre-rendered AI clips)")
-        print("  3. Hybrid Mode (Mixed Static Images + AI Videos - DEFAULT)")
-        
-        m_choice = input("\nSelect Media Type (1, 2, or 3) [Press Enter for 3]: ").strip()
-        
-        if m_choice == '1':
-            media_mode_sel = "image"
-        elif m_choice == '2':
-            media_mode_sel = "video"
-        else:
-            media_mode_sel = "hybrid"
+    bulk_choice = "M" 
 
-        print("\n" + "-"*40)
-        print("   SELECT OUTPUT PIPELINE (PHASE 4)")
-        print("-" * 40)
-        print("  1. FFmpeg Master Render Only (DEFAULT)")
-        print("  2. CapCut Draft Injection Only")
-        print("  3. BOTH (FFmpeg Render + CapCut Draft)")
-        
-        p_choice = input("\nSelect Output Pipeline (1, 2, or 3) [Press Enter for 1]: ").strip()
-        
-        if p_choice == '2':
-            enable_ffmpeg = False
-            enable_capcut = True
-        elif p_choice == '3':
-            enable_ffmpeg = True
-            enable_capcut = True
-            
-        # --- NEW: BULK VARIANT SELECTION FOR ZERO-TOUCH RUNS ---
-        if media_mode_sel in ["video", "hybrid"]:
-            print("\n" + "-"*40)
-            print("   SELECT DIRECTOR'S CUT MODE")
-            print("-" * 40)
-            if manual_mode or phase_choice == '6':
-                bulk_choice = input("Enter variant (1-4) to Auto-Apply to all scenes, OR press 'M' for Manual: ").strip().upper()
-                if bulk_choice not in ["1", "2", "3", "4", "M"]: 
-                    bulk_choice = "M"
-            else:
-                print("[System] Fully Automated Mode detected. Auto-defaulting to Variant 1 for Zero-Touch flow.")
-                bulk_choice = "1"
 
     # ==============================================================
     # PHASE 1: ASSET CREATION (Core Script, Audio, Prompts)
@@ -482,7 +437,9 @@ def main():
                 if audio_path:
                     print("\n[Engine] Initializing WhisperX Transcription Pipeline...")
                     from app.services.transcription_service import TranscriptionService
-                    transcriber = TranscriptionService(device="cuda", output_dir=current_run_dir) 
+                    from app.services.llm_client import GeminiClient
+                    llm = GeminiClient()
+                    transcriber = TranscriptionService(llm_client= llm, device="cuda", output_dir=current_run_dir) 
                     batched_json_path = transcriber.extract_and_batch(
                         audio_path=audio_path, 
                         request_yaml=raw_yaml_request,
@@ -625,19 +582,33 @@ def main():
             
             scraper.generate_images(input_file=prompts_file, output_dir=raw_output_dir)
             
+            # -------------------------------------------------------------
+            # FIXED: Smarter Verification for Phase 2 
+            # (Checks if start_end timestamps simply exist inside ANY file name)
+            # -------------------------------------------------------------
             expected_prompts = []
             with open(prompts_file, 'r', encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
-                        match = re.search(r"\[([\d_]+)-([\d_]+)\]", line)
+                        # Capture decimals, colons, underscores safely
+                        match = re.search(r"\[([\d\.:_]+)-([\d\.:_]+)\]", line)
                         if match:
                             start_s, end_s = match.groups()
-                            filename = f"[{start_s}-{end_s}]_image.png"
-                            expected_prompts.append((filename, line.strip()))
+                            expected_prompts.append((start_s, end_s, line.strip()))
                             
             expected_count = len(expected_prompts)
             missing_prompts_file = current_run_dir / "missing_prompts_retry.txt"
-            missing_items = [item for item in expected_prompts if not (raw_output_dir / item[0]).exists()]
+            
+            # Read all generated file names
+            existing_files = [f.name for f in raw_output_dir.iterdir() if f.is_file()]
+            missing_items = []
+            
+            for start_s, end_s, full_line in expected_prompts:
+                # Based on filename structure [BASE]_0_0-1_09_image.png 
+                # We check for the unique timestamp combination
+                timestamp_tag = f"{start_s}-{end_s}"
+                if not any(timestamp_tag in fname for fname in existing_files):
+                    missing_items.append((timestamp_tag, full_line))
             
             actual_count = expected_count - len(missing_items)
             
@@ -704,6 +675,7 @@ def main():
         static_prompts_file = current_run_dir / "time_stamped_prompts.txt"
         raw_images_dir = current_run_dir / "1_raw_images"
         upscale_dir = current_run_dir / "3_upscaled" # Target directory for videos
+        production_ready_dir = current_run_dir / "4_final_production"
         
         # 1. Generate Hybrid Animation Prompts
         llm = GeminiClient()
@@ -760,12 +732,61 @@ def main():
             if ans == '0': pack_system_data(current_run_dir); sys.exit(0)
             elif ans == '2': manual_mode = False; print("[System] Switched to Fully Automated mode.")
 
+
     # ==============================================================
     # PHASE 4: FINAL RENDER
     # ==============================================================
     if run_phase4:
         print("\n[Engine] Initializing Phase 4 (Asset Processing & Render)...")
         
+        # -------------------------------------------------------------
+        # PROMPTS MOVED HERE: Now they only ask when Phase 4 starts!
+        # -------------------------------------------------------------
+        print("\n" + "-"*40)
+        print("   SELECT MEDIA TYPE (PHASE 4)")
+        print("-" * 40)
+        print("  1. Image Mode (Upscaled static images)")
+        print("  2. Video Mode (Pre-rendered AI clips)")
+        print("  3. Hybrid Mode (Mixed Static Images + AI Videos - DEFAULT)")
+        
+        m_choice = input("\nSelect Media Type (1, 2, or 3) [Press Enter for 3]: ").strip()
+        
+        if m_choice == '1':
+            media_mode_sel = "image"
+        elif m_choice == '2':
+            media_mode_sel = "video"
+        else:
+            media_mode_sel = "hybrid"
+
+        print("\n" + "-"*40)
+        print("   SELECT OUTPUT PIPELINE (PHASE 4)")
+        print("-" * 40)
+        print("  1. FFmpeg Master Render Only (DEFAULT)")
+        print("  2. CapCut Draft Injection Only")
+        print("  3. BOTH (FFmpeg Render + CapCut Draft)")
+        
+        p_choice = input("\nSelect Output Pipeline (1, 2, or 3) [Press Enter for 1]: ").strip()
+        
+        if p_choice == '2':
+            enable_ffmpeg = False
+            enable_capcut = True
+        elif p_choice == '3':
+            enable_ffmpeg = True
+            enable_capcut = True
+            
+        if media_mode_sel in ["video", "hybrid"]:
+            print("\n" + "-"*40)
+            print("   SELECT DIRECTOR'S CUT MODE")
+            print("-" * 40)
+            if manual_mode or phase_choice == '6':
+                bulk_choice = input("Enter variant (1-4) to Auto-Apply to all scenes, OR press 'M' for Manual: ").strip().upper()
+                if bulk_choice not in ["1", "2", "3", "4", "M"]: 
+                    bulk_choice = "M"
+            else:
+                print("[System] Fully Automated Mode detected. Auto-defaulting to Variant 1 for Zero-Touch flow.")
+                bulk_choice = "1"
+        # -------------------------------------------------------------
+
         raw_dir = current_run_dir / "1_raw_images"
         wm_dir = current_run_dir / "2_watermark_removed"
         up_dir = current_run_dir / "3_upscaled"
@@ -819,6 +840,10 @@ def main():
                 print("\n[System] Pre-rendered variants detected for Video/Hybrid mode. Bypassing static image upscaling...")
                 p4_choice = '5' # Jump straight to Assembly Engine!
         
+        # -------------------------------------------------------------
+        # FIXED: Phase 4 Manual Prompts Execution Logic
+        # -------------------------------------------------------------
+        
         if p4_choice in ['1', '2']:
             if manual_mode:
                 current_state = "1" if enable_watermark_remover else "0"
@@ -834,14 +859,32 @@ def main():
                 print("\n[System] Watermark removal toggled OFF. Bypassing directly to upscaler...")
             
         if p4_choice in ['1', '3']:
-            source_dir = wm_dir if wm_dir.exists() and any(wm_dir.iterdir()) else raw_dir
-            m2.run_upscaler(source_dir, up_dir, temp_dir, target_upscaler)
+            run_up = True
+            if manual_mode:
+                override = input("\nRun Upscaler? (1: Yes, 0: No) [Current: 1]: ").strip()
+                if override == '0':
+                    run_up = False
+                    
+            if run_up:
+                source_dir = wm_dir if wm_dir.exists() and any(wm_dir.iterdir()) else raw_dir
+                m2.run_upscaler(source_dir, up_dir, temp_dir, target_upscaler)
+            else:
+                print("\n[System] Upscaler bypassed...")
             
         if p4_choice in ['1', '4']:
-            source_dir = up_dir if up_dir.exists() and any(up_dir.iterdir()) else wm_dir
-            if not source_dir.exists() or not any(source_dir.iterdir()):
-                source_dir = raw_dir
-            m2.run_renamer(source_dir, final_dir)
+            run_rn = True
+            if manual_mode:
+                override = input("\nRun Timeline Renamer? (1: Yes, 0: No) [Current: 1]: ").strip()
+                if override == '0':
+                    run_rn = False
+                    
+            if run_rn:
+                source_dir = up_dir if up_dir.exists() and any(up_dir.iterdir()) else wm_dir
+                if not source_dir.exists() or not any(source_dir.iterdir()):
+                    source_dir = raw_dir
+                m2.run_renamer(source_dir, final_dir)
+            else:
+                print("\n[System] Renamer bypassed...")
             
         if p4_choice in ['1', '5']:
             if generate_video == '1':
